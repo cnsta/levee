@@ -43,6 +43,19 @@
         };
     });
 
+    packages = forAllPlatforms (pkgs: let
+      scope = pkgs.callPackage ./nix/pkgs {};
+    in {
+      inherit (scope) levee;
+      default = scope.levee;
+    });
+
+    overlays.default = final: _prev: let
+      scope = final.callPackage ./nix/pkgs {};
+    in {
+      inherit (scope) levee;
+    };
+
     formatter = forAllPlatforms (pkgs: pkgs.alejandra);
   };
 }
