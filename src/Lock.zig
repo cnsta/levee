@@ -17,6 +17,7 @@ const xkb = @import("xkbcommon");
 
 const auth = @import("auth.zig");
 const Secret = @import("Secret.zig");
+const Output = @import("Output.zig");
 const Seat = @import("Seat.zig");
 const list = @import("util/list.zig");
 
@@ -55,6 +56,7 @@ session_lock_manager: ?*ext.SessionLockManagerV1 = null,
 session_lock: ?*ext.SessionLockV1 = null,
 
 seats: wl.list.Head(Seat, .link),
+outputs: wl.list.Head(Output, .link),
 
 xkb_context: *xkb.Context,
 
@@ -70,6 +72,7 @@ pub fn run(gpa: mem.Allocator, username: []const u8, options: Options) !void {
         },
         .seats = undefined,
         .outputs = undefined,
+        .xkb_context = xkb.Context.new(.no_flags) orelse fatalOom(),
     };
     defer lock.deinit();
 
@@ -98,6 +101,16 @@ pub fn run(gpa: mem.Allocator, username: []const u8, options: Options) !void {
 
     assert(lock.state == .initializing);
     lock.state = .locking;
+
+    {
+        var it = list.safeIterator(Output, .link, &lock.outputs);
+        while (it.next()) |output| {
+            output.createSurface() catch {
+                log.err("out of memory creating lock surface, dropping output", .{});
+                output.destroy();
+            };
+        }
+    }
 
     while (lock.state != .exiting) {
         lock.flushWaylandAndPrepareRead();
@@ -205,13 +218,37 @@ fn handleRegistryEvent(lock: *Lock, registry: *wl.Registry, event: wl.Registry.E
                 const wl_output = try registry.bind(ev.name, wl.Output, 4);
                 errdefer wl_output.release();
 
+                const output = try lock.gpa.create(Output);
+                errdefer lock.gpa.destroy(output);
+
+                output.* = .{ .lock = lock, .name = ev.name, .wl_output = wl_output, .link = undefined };
+                lock.outputs.prepend(output);
+
                 switch (lock.state) {
                     .initializing, .exiting => {},
+                    .locking, .locked => try output.createSurface(),
                 }
             } else if (mem.orderZ(u8, ev.interface, wl.Seat.interface.name) == .eq) {
                 if (ev.version < 5) fatal("advertised wl_seat version too old, need >= 5", .{});
                 const wl_seat = try registry.bind(ev.name, wl.Seat, 5);
                 errdefer wl_seat.release();
+                try Seat.create(lock, ev.name, wl_seat);
+            }
+        },
+        .global_remove => |ev| {
+            var out_it = list.safeIterator(Output, .link, &lock.outputs);
+            while (out_it.next()) |output| {
+                if (output.name == ev.name) {
+                    output.destroy();
+                    break;
+                }
+            }
+            var seat_it = list.safeIterator(Seat, .link, &lock.seats);
+            while (seat_it.next()) |seat| {
+                if (seat.name == ev.name) {
+                    seat.destroy();
+                    break;
+                }
             }
         },
     }
@@ -265,4 +302,29 @@ pub fn submitPassword(lock: *Lock) void {
         return;
     };
     lock.secret.clear();
+}
+
+pub fn rgb(lock: *Lock, color: Color) u24 {
+    return switch (color) {
+        .init => lock.options.init_color,
+        .input => lock.options.input_color,
+        .input_alt => lock.options.input_alt_color,
+        .fail => lock.options.fail_color,
+    };
+}
+
+pub fn setColor(lock: *Lock, color: Color) void {
+    if (lock.color == color) return;
+    lock.color = color;
+
+    var it = list.safeIterator(Output, .link, &lock.outputs);
+    while (it.next()) |output| output.draw(lock.rgb(color));
+}
+
+fn fatalOom() noreturn {
+    fatal("out of memory during initialization", .{});
+}
+
+fn fatalNotAdvertised(comptime Global: type) noreturn {
+    fatal("{s} not advertised by the compositor", .{Global.interface.name});
 }
