@@ -17,6 +17,7 @@ const xkb = @import("xkbcommon");
 
 const auth = @import("auth.zig");
 const Secret = @import("Secret.zig");
+const Seat = @import("Seat.zig");
 const list = @import("util/list.zig");
 
 pub const Color = enum { init, input, input_alt, fail };
@@ -53,7 +54,86 @@ shm: ?*wl.Shm = null,
 session_lock_manager: ?*ext.SessionLockManagerV1 = null,
 session_lock: ?*ext.SessionLockV1 = null,
 
+seats: wl.list.Head(Seat, .link),
+
 xkb_context: *xkb.Context,
+
+pub fn run(gpa: mem.Allocator, username: []const u8, options: Options) !void {
+    var lock: Lock = .{
+        .gpa = gpa,
+        .username = username,
+        .options = options,
+        .secret = .init(),
+        .pollfds = undefined,
+        .display = wl.Display.connect(null) catch |err| {
+            fatal("failed to connect to a wayland compositor: {s}", .{@errorName(err)});
+        },
+        .seats = undefined,
+        .outputs = undefined,
+    };
+    defer lock.deinit();
+
+    lock.seats.init();
+    lock.outputs.init();
+
+    const poll_wayland = 0;
+    const poll_auth = 1;
+
+    lock.pollfds[poll_wayland] = .{ .fd = lock.display.getFd(), .events = posix.POLL.IN, .revents = 0 };
+    lock.pollfds[poll_auth] = .{ .fd = -1, .events = 0, .revents = 0 };
+
+    const registry = lock.display.getRegistry();
+    defer registry.destroy();
+    registry.setListener(*Lock, registryListener, &lock);
+
+    {
+        const errno = lock.display.roundtrip();
+        if (errno != .SUCCESS) fatal("initial roundtrip failed: {s}", .{@tagName(errno)});
+    }
+
+    lock.session_lock.?.setListener(*Lock, sessionLockListener, &lock);
+
+    lock.session_lock_manager.?.destroy();
+    lock.session_lock_manager = null;
+
+    assert(lock.state == .initializing);
+    lock.state = .locking;
+
+    while (lock.state != .exiting) {
+        lock.flushWaylandAndPrepareRead();
+
+        lock.pollfds[poll_auth] = if (lock.in_flight) |a|
+            .{ .fd = a.fd, .events = posix.POLL.IN, .revents = 0 }
+        else
+            .{ .fd = -1, .events = 0, .revents = 0 };
+
+        _ = posix.poll(&lock.pollfds, -1) catch |err| {
+            fatal("poll() failed: {s}", .{@errorName(err)});
+        };
+
+        if (lock.pollfds[poll_wayland].revents & posix.POLL.IN != 0) {
+            const errno = lock.display.readEvents();
+            if (errno != .SUCCESS) fatal("error reading wayland events: {s}", .{@tagName(errno)});
+        } else {
+            lock.display.cancelRead();
+        }
+
+        if (lock.in_flight != null and lock.pollfds[poll_auth].revents & posix.POLL.IN != 0) {
+            const attempt = lock.in_flight.?;
+            lock.in_flight = null;
+            if (auth.finish(attempt)) {
+                lock.session_lock.?.unlockAndDestroy();
+                lock.session_lock = null;
+                lock.state = .exiting;
+            } else {
+                lock.setColor(.fail);
+            }
+        }
+    }
+
+    const errno = lock.display.roundtrip();
+    if (errno != .SUCCESS) fatal("final roundtrip failed: {s}", .{@tagName(errno)});
+}
 
 fn flushWaylandAndPrepareRead(lock: *Lock) void {
     while (!lock.display.prepareRead()) {
