@@ -15,6 +15,7 @@ const ext = wayland.client.ext;
 
 const xkb = @import("xkbcommon");
 
+const auth = @import("auth.zig");
 const Secret = @import("Secret.zig");
 const list = @import("util/list.zig");
 
@@ -42,6 +43,7 @@ state: enum {
 
 color: Color = .init,
 secret: Secret,
+in_flight: ?auth.Attempt = null,
 
 pollfds: [2]posix.pollfd,
 
@@ -176,5 +178,11 @@ pub fn submitPassword(lock: *Lock) void {
         return;
     }
 
+    lock.in_flight = auth.begin(lock.username, lock.secret.slice()) catch |err| {
+        log.err("failed to start authentication attempt: {s}", .{@errorName(err)});
+        lock.setColor(.fail);
+        lock.secret.clear();
+        return;
+    };
     lock.secret.clear();
 }
