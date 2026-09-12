@@ -85,7 +85,7 @@ pub fn run(gpa: mem.Allocator, username: []const u8, options: Options) !void {
     lock.pollfds[poll_wayland] = .{ .fd = lock.display.getFd(), .events = posix.POLL.IN, .revents = 0 };
     lock.pollfds[poll_auth] = .{ .fd = -1, .events = 0, .revents = 0 };
 
-    const registry = lock.display.getRegistry();
+    const registry = lock.display.getRegistry() catch fatalOom();
     defer registry.destroy();
     registry.setListener(*Lock, registryListener, &lock);
 
@@ -94,6 +94,11 @@ pub fn run(gpa: mem.Allocator, username: []const u8, options: Options) !void {
         if (errno != .SUCCESS) fatal("initial roundtrip failed: {s}", .{@tagName(errno)});
     }
 
+    if (lock.compositor == null) fatalNotAdvertised(wl.Compositor);
+    if (lock.shm == null) fatalNotAdvertised(wl.Shm);
+    if (lock.session_lock_manager == null) fatalNotAdvertised(ext.SessionLockManagerV1);
+
+    lock.session_lock = lock.session_lock_manager.?.lock() catch fatalOom();
     lock.session_lock.?.setListener(*Lock, sessionLockListener, &lock);
 
     lock.session_lock_manager.?.destroy();
