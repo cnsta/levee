@@ -1,0 +1,8 @@
+zig-out/
+.zig-cache/
+zig-pkg/
+.direnv/
+.envrc.local
+result
+result-*
+
