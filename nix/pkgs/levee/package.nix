@@ -53,6 +53,7 @@ stdenv.mkDerivation (finalAttrs: {
   meta = {
     homepage = "https://git.cnst.dev/cnst/levee";
     description = "An optional screen locker for river, using ext-session-lock-v1";
+    license = lib.licenses.bsd0;
     mainProgram = "levee";
     platforms = lib.platforms.linux;
   };
