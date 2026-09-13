@@ -167,7 +167,7 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, seat: *Seat) void
                     lock.setColor(.init);
                     return;
                 },
-                @intFromEnum(xkb.Keysym.u) => {
+                @intFromEnum(xkb.Keysym.u), @intFromEnum(xkb.Keysym.c) => {
                     const ctrl_active = xkb_state.modNameIsActive(
                         xkb.names.mod.ctrl,
                         @enumFromInt(xkb.State.Component.mods_depressed | xkb.State.Component.mods_latched),
