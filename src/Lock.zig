@@ -21,7 +21,7 @@ const Output = @import("Output.zig");
 const Seat = @import("Seat.zig");
 const list = @import("util/list.zig");
 
-pub const Color = enum { init, input, input_alt, fail };
+pub const Color = enum { init, input, input_alt, verifying, fail };
 
 pub const Options = struct {
     ready_fd: ?posix.fd_t = null,
@@ -29,6 +29,7 @@ pub const Options = struct {
     init_color: u24 = 0x002b36,
     input_color: u24 = 0x6c71c4,
     input_alt_color: u24 = 0x6c71c4,
+    verifying_color: u24 = 0x268bd2,
     fail_color: u24 = 0xdc322f,
 };
 
@@ -44,6 +45,8 @@ state: enum {
 } = .initializing,
 
 color: Color = .init,
+caps_lock: bool = false,
+attempt_count: u32 = 0,
 secret: Secret,
 in_flight: ?auth.Attempt = null,
 
@@ -306,14 +309,16 @@ pub fn submitPassword(lock: *Lock) void {
         lock.secret.clear();
         return;
     };
+    lock.setColor(.verifying);
     lock.secret.clear();
 }
 
-pub fn rgb(lock: *Lock, color: Color) u24 {
+pub fn rgb(lock: *const Lock, color: Color) u24 {
     return switch (color) {
         .init => lock.options.init_color,
         .input => lock.options.input_color,
         .input_alt => lock.options.input_alt_color,
+        .verifying => lock.options.verifying_color,
         .fail => lock.options.fail_color,
     };
 }
@@ -321,9 +326,19 @@ pub fn rgb(lock: *Lock, color: Color) u24 {
 pub fn setColor(lock: *Lock, color: Color) void {
     if (lock.color == color) return;
     lock.color = color;
+    if (color == .fail) lock.attempt_count += 1;
+    lock.redrawAll();
+}
 
+pub fn setCapsLock(lock: *Lock, active: bool) void {
+    if (lock.caps_lock == active) return;
+    lock.caps_lock = active;
+    lock.redrawAll();
+}
+
+pub fn redrawAll(lock: *Lock) void {
     var it = list.safeIterator(Output, .link, &lock.outputs);
-    while (it.next()) |output| output.draw(lock.rgb(color));
+    while (it.next()) |output| output.render(lock);
 }
 
 fn fatalOom() noreturn {
