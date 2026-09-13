@@ -20,6 +20,7 @@ const Secret = @import("Secret.zig");
 const Output = @import("Output.zig");
 const Seat = @import("Seat.zig");
 const list = @import("util/list.zig");
+const bgimg = @import("background.zig");
 
 pub const Color = enum { init, input, input_alt, verifying, fail };
 
@@ -31,6 +32,8 @@ pub const Options = struct {
     input_alt_color: u24 = 0x6c71c4,
     verifying_color: u24 = 0x268bd2,
     fail_color: u24 = 0xdc322f,
+    image_path: ?[]const u8 = null,
+    image_mode: bgimg.Mode = .fill,
 };
 
 gpa: mem.Allocator,
@@ -49,6 +52,7 @@ caps_lock: bool = false,
 attempt_count: u32 = 0,
 secret: Secret,
 in_flight: ?auth.Attempt = null,
+background: ?bgimg.DecodedImage = null,
 
 pollfds: [2]posix.pollfd,
 
@@ -63,7 +67,18 @@ outputs: wl.list.Head(Output, .link),
 
 xkb_context: *xkb.Context,
 
-pub fn run(gpa: mem.Allocator, username: []const u8, options: Options) !void {
+pub fn run(gpa: mem.Allocator, io: std.Io, username: []const u8, options: Options) !void {
+    var background_image: ?bgimg.DecodedImage = null;
+    if (options.image_path) |path| {
+        background_image = bgimg.load(gpa, io, path) catch |err| blk: {
+            log.warn(
+                "failed to load background image '{s}': {s} (using the solid background color instead)",
+                .{ path, @errorName(err) },
+            );
+            break :blk null;
+        };
+    }
+
     var lock: Lock = .{
         .gpa = gpa,
         .username = username,
@@ -76,6 +91,7 @@ pub fn run(gpa: mem.Allocator, username: []const u8, options: Options) !void {
         .seats = undefined,
         .outputs = undefined,
         .xkb_context = xkb.Context.new(.no_flags) orelse fatalOom(),
+        .background = background_image,
     };
     defer lock.deinit();
 
@@ -188,6 +204,7 @@ fn flushWaylandAndPrepareRead(lock: *Lock) void {
 }
 
 fn deinit(lock: *Lock) void {
+    if (lock.background) |*bg| bg.deinit(lock.gpa);
     if (lock.compositor) |c| c.destroy();
     if (lock.shm) |s| s.destroy();
 
