@@ -11,6 +11,7 @@ const wl = wayland.client.wl;
 const ext = wayland.client.ext;
 
 const Lock = @import("Lock.zig");
+const gfx = @import("render.zig");
 
 lock: *Lock,
 name: u32,
@@ -45,7 +46,7 @@ pub fn destroy(output: *Output) void {
     output.lock.gpa.destroy(output);
 }
 
-pub fn draw(output: *Output, color: u24) void {
+pub fn render(output: *Output, lock: *const Lock) void {
     if (!output.configured) return;
     const sb = output.shm orelse return;
 
@@ -54,13 +55,57 @@ pub fn draw(output: *Output, color: u24) void {
         return;
     };
 
-    @memset(buffer.pixels, @as(u32, color));
+    const canvas: gfx.Canvas = .{ .pixels = buffer.pixels, .width = output.width, .height = output.height };
+    const bg = lock.options.init_color;
+    canvas.fill(bg);
+
+    const cx: f32 = @as(f32, @floatFromInt(output.width)) / 2.0;
+    const cy: f32 = @as(f32, @floatFromInt(output.height)) / 2.0;
+    const min_dim: f32 = @floatFromInt(@min(output.width, output.height));
+    const radius = min_dim * 0.12;
+    const thickness = @max(4.0, radius * 0.12);
+    const ring_color: gfx.Color = 0x93a1a1;
+
+    canvas.drawRing(cx, cy, radius - thickness, radius, ring_color, bg);
+    canvas.drawDisk(cx, cy, @max(1.0, radius - thickness - 4.0), lock.rgb(lock.color), bg);
+
+    if (lock.color == .input or lock.color == .input_alt) {
+        const golden: f32 = 2.399963;
+        const len_f: f32 = @floatFromInt(lock.secret.len);
+        const angle = @mod(len_f * golden, math.tau);
+        canvas.drawArc(cx, cy, radius - thickness - 2.0, radius + 2.0, angle, math.tau / 8.0, 0xfdf6e3, bg);
+    }
+
+    if (lock.caps_lock) {
+        drawCentered(canvas, cx, cy - radius - 8.0 - 7.0 * text_scale, "CAPS LOCK", ring_color);
+    }
+
+    switch (lock.color) {
+        .fail => {
+            var buf: [32]u8 = undefined;
+            const label = std.fmt.bufPrint(&buf, "WRONG PASSWORD ({d})", .{lock.attempt_count}) catch "WRONG PASSWORD";
+            drawCentered(canvas, cx, cy + radius + 16.0, label, ring_color);
+        },
+        .verifying => drawCentered(canvas, cx, cy + radius + 16.0, "VERIFYING", ring_color),
+        else => {},
+    }
+
     buffer.busy = true;
 
     const surface = output.surface.?;
     surface.attach(buffer.wl_buffer, 0, 0);
     surface.damageBuffer(0, 0, math.maxInt(i32), math.maxInt(i32));
     surface.commit();
+}
+
+const text_scale: f32 = 3.0;
+
+fn drawCentered(canvas: gfx.Canvas, cx: f32, y: f32, label: []const u8, color: gfx.Color) void {
+    const scale: i32 = @intFromFloat(text_scale);
+    const w = gfx.textWidth(label, scale);
+    const x0: i32 = @as(i32, @intFromFloat(cx)) - @divTrunc(w, 2);
+    const y0: i32 = @intFromFloat(y);
+    canvas.drawText(x0, y0, label, color, scale);
 }
 
 fn ensureShm(output: *Output) !void {
@@ -87,7 +132,7 @@ fn lockSurfaceListener(
                 log.err("failed to allocate shm buffers: {s}", .{@errorName(err)});
                 return;
             };
-            output.draw(output.lock.rgb(output.lock.color));
+            output.render(output.lock);
         },
     }
 }
