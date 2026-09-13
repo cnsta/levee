@@ -12,6 +12,7 @@ const ext = wayland.client.ext;
 
 const Lock = @import("Lock.zig");
 const gfx = @import("render.zig");
+const Font = @import("render/font.zig");
 
 lock: *Lock,
 name: u32,
@@ -67,14 +68,16 @@ pub fn render(output: *Output, lock: *const Lock) void {
 
     const dot_count = std.unicode.utf8CountCodepoints(lock.secret.slice()) catch lock.secret.len;
     if (dot_count > 0) {
-        const dot_radius: f32 = min_dim * 0.012;
-        const spacing: f32 = dot_radius * 3.5;
+        const scale: i32 = @intFromFloat(text_scale);
+        const advance: f32 = @floatFromInt((Font.width + 1) * scale);
         const count_f: f32 = @floatFromInt(dot_count);
-        const start_x = cx - spacing * (count_f - 1) / 2.0;
+        const row_width: f32 = count_f * advance - @as(f32, @floatFromInt(scale));
+        const start_x: f32 = cx - row_width / 2.0;
+        const y0: f32 = cy - @as(f32, @floatFromInt(Font.height * scale)) / 2.0;
         var i: usize = 0;
         while (i < dot_count) : (i += 1) {
-            const dot_x = start_x + spacing * @as(f32, @floatFromInt(i));
-            canvas.drawDisk(dot_x, cy, dot_radius, lock.rgb(lock.color), bg);
+            const glyph_x: i32 = @intFromFloat(start_x + advance * @as(f32, @floatFromInt(i)));
+            canvas.drawGlyph(glyph_x, @intFromFloat(y0), '*', lock.rgb(lock.color), scale);
         }
     }
 
