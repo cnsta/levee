@@ -22,7 +22,18 @@ pub fn load(gpa: mem.Allocator, io: std.Io, path: []const u8) !DecodedImage {
     var read_buffer: [zigimg.io.DEFAULT_BUFFER_SIZE]u8 = undefined;
     var image = try zigimg.Image.fromFilePath(gpa, io, path, &read_buffer);
     defer image.deinit(gpa);
+    return normalize(gpa, image);
+}
 
+const default_wallpaper_bytes = @embedFile("assets/wallpaper.jpg");
+
+pub fn loadDefault(gpa: mem.Allocator) !DecodedImage {
+    var image = try zigimg.Image.fromMemory(gpa, default_wallpaper_bytes);
+    defer image.deinit(gpa);
+    return normalize(gpa, image);
+}
+
+fn normalize(gpa: mem.Allocator, image: zigimg.Image) !DecodedImage {
     if (image.width == 0 or image.height == 0) return error.EmptyImage;
     if (image.width > math.maxInt(u31) or image.height > math.maxInt(u31)) {
         return error.ImageTooLarge;
@@ -161,6 +172,15 @@ fn putPixel(canvas: gfx.Canvas, x: i32, y: i32, image: DecodedImage, sx: u32, sy
 }
 
 const testing = std.testing;
+
+test "loadDefault decodes the embedded wallpaper into a sane RGBA8 buffer" {
+    var image = try loadDefault(testing.allocator);
+    defer image.deinit(testing.allocator);
+
+    try testing.expect(image.width > 0);
+    try testing.expect(image.height > 0);
+    try testing.expectEqual(@as(usize, image.width) * image.height * 4, image.pixels.len);
+}
 
 test "placement: stretch always maps to the full buffer regardless of image size" {
     const p = placement(.stretch, 100, 50, 800, 600);
