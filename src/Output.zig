@@ -66,7 +66,7 @@ pub fn render(output: *Output, lock: *const Lock) void {
     }
 
     const cx: f32 = @as(f32, @floatFromInt(output.width)) / 2.0;
-    const cy: f32 = @as(f32, @floatFromInt(output.height)) / 2.0;
+    const cy: f32 = @as(f32, @floatFromInt(output.height)) * 0.6;
     const min_dim: f32 = @floatFromInt(@min(output.width, output.height));
     const label_color: gfx.Color = 0x93a1a1;
     const status_gap: f32 = min_dim * 0.05;
