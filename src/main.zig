@@ -12,6 +12,7 @@ const flags = @import("flags.zig");
 test {
     _ = @import("Secret.zig");
     _ = @import("auth.zig");
+    _ = @import("render.zig");
 }
 
 const usage =
@@ -27,6 +28,7 @@ const usage =
     \\  -init-color 0xRRGGBB       Set the initial color.
     \\  -input-color 0xRRGGBB      Set the color used after input.
     \\  -input-alt-color 0xRRGGBB  Set the alternate color used after input.
+    \\  -verifying-color 0xRRGGBB  Set the color used while checking the password.
     \\  -fail-color 0xRRGGBB       Set the color used on authentication failure.
     \\
 ;
@@ -45,6 +47,7 @@ pub fn main(init: process.Init) !void {
         .{ .name = "init-color", .kind = .arg },
         .{ .name = "input-color", .kind = .arg },
         .{ .name = "input-alt-color", .kind = .arg },
+        .{ .name = "verifying-color", .kind = .arg },
         .{ .name = "fail-color", .kind = .arg },
     }).parse(args[1..]) catch {
         std.debug.print("{s}", .{usage});
@@ -91,6 +94,7 @@ pub fn main(init: process.Init) !void {
         options.input_alt_color = parseColor(raw);
     }
     if (result.flags.@"input-alt-color") |raw| options.input_alt_color = parseColor(raw);
+    if (result.flags.@"verifying-color") |raw| options.verifying_color = parseColor(raw);
     if (result.flags.@"fail-color") |raw| options.fail_color = parseColor(raw);
 
     const passwd: *pam.struct_passwd = pam.getpwuid(pam.getuid()) orelse {
