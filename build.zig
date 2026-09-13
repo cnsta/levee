@@ -16,6 +16,7 @@ pub fn build(b: *std.Build) void {
 
     const wayland = b.createModule(.{ .root_source_file = scanner.result });
     const xkbcommon = b.dependency("xkbcommon", .{}).module("xkbcommon");
+    const zigimg = b.dependency("zigimg", .{}).module("zigimg");
 
     const pam = b.addTranslateC(.{
         .root_source_file = b.path("src/pam.h"),
@@ -35,10 +36,14 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "wayland", .module = wayland },
                 .{ .name = "xkbcommon", .module = xkbcommon },
+                .{ .name = "zigimg", .module = zigimg },
                 .{ .name = "pam", .module = pam.createModule() },
             },
         }),
     });
+
+    exe.use_llvm = true;
+    exe.use_lld = true;
 
     exe.root_module.linkSystemLibrary("wayland-client", .{});
     exe.root_module.linkSystemLibrary("xkbcommon", .{});
@@ -54,6 +59,8 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
     const tests = b.addTest(.{ .root_module = exe.root_module });
+    tests.use_llvm = true;
+    tests.use_lld = true;
     test_step.dependOn(&b.addRunArtifact(tests).step);
 }
 

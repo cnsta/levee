@@ -12,6 +12,10 @@
             .url = "git+https://codeberg.org/ifreund/zig-xkbcommon.git#6c2f41e269adde0d2cd58d20c02c4f8803d83eb1",
             .hash = "xkbcommon-0.5.0-dev-VDqIe0y2AgA1RzA2ICMdGhaAgSXdhtRTbYybQQu7WfOa",
         },
+        .zigimg = .{
+            .url = "git+https://github.com/zigimg/zigimg.git#575e194a494144aced6b7e920b13faab48864340",
+            .hash = "zigimg-0.1.0-8_eo2hgmGAAqEt2YcxP9GKGmYVdtLHEEBO03PZQ_3IgG",
+        },
     },
     .paths = .{
         "build.zig",
