@@ -31,24 +31,6 @@ pub const Canvas = struct {
         canvas.drawAnnulus(cx, cy, 0, radius, 0, math.tau, color, bg);
     }
 
-    pub fn drawRing(canvas: Canvas, cx: f32, cy: f32, inner: f32, outer: f32, color: Color, bg: Color) void {
-        canvas.drawAnnulus(cx, cy, inner, outer, 0, math.tau, color, bg);
-    }
-
-    pub fn drawArc(
-        canvas: Canvas,
-        cx: f32,
-        cy: f32,
-        inner: f32,
-        outer: f32,
-        start_rad: f32,
-        sweep_rad: f32,
-        color: Color,
-        bg: Color,
-    ) void {
-        canvas.drawAnnulus(cx, cy, inner, outer, start_rad, sweep_rad, color, bg);
-    }
-
     fn drawAnnulus(
         canvas: Canvas,
         cx: f32,
