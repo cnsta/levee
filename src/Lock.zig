@@ -77,6 +77,14 @@ pub fn run(gpa: mem.Allocator, io: std.Io, username: []const u8, options: Option
             );
             break :blk null;
         };
+    } else {
+        background_image = bgimg.loadDefault(gpa) catch |err| blk: {
+            log.warn(
+                "failed to load the built-in default background image: {s} (using the solid background color instead)",
+                .{@errorName(err)},
+            );
+            break :blk null;
+        };
     }
 
     var lock: Lock = .{
