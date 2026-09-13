@@ -62,31 +62,33 @@ pub fn render(output: *Output, lock: *const Lock) void {
     const cx: f32 = @as(f32, @floatFromInt(output.width)) / 2.0;
     const cy: f32 = @as(f32, @floatFromInt(output.height)) / 2.0;
     const min_dim: f32 = @floatFromInt(@min(output.width, output.height));
-    const radius = min_dim * 0.12;
-    const thickness = @max(4.0, radius * 0.12);
-    const ring_color: gfx.Color = 0x93a1a1;
+    const label_color: gfx.Color = 0x93a1a1;
+    const status_gap: f32 = min_dim * 0.05;
 
-    canvas.drawRing(cx, cy, radius - thickness, radius, ring_color, bg);
-    canvas.drawDisk(cx, cy, @max(1.0, radius - thickness - 4.0), lock.rgb(lock.color), bg);
-
-    if (lock.color == .input or lock.color == .input_alt) {
-        const golden: f32 = 2.399963;
-        const len_f: f32 = @floatFromInt(lock.secret.len);
-        const angle = @mod(len_f * golden, math.tau);
-        canvas.drawArc(cx, cy, radius - thickness - 2.0, radius + 2.0, angle, math.tau / 8.0, 0xfdf6e3, bg);
+    const dot_count = std.unicode.utf8CountCodepoints(lock.secret.slice()) catch lock.secret.len;
+    if (dot_count > 0) {
+        const dot_radius: f32 = min_dim * 0.012;
+        const spacing: f32 = dot_radius * 3.5;
+        const count_f: f32 = @floatFromInt(dot_count);
+        const start_x = cx - spacing * (count_f - 1) / 2.0;
+        var i: usize = 0;
+        while (i < dot_count) : (i += 1) {
+            const dot_x = start_x + spacing * @as(f32, @floatFromInt(i));
+            canvas.drawDisk(dot_x, cy, dot_radius, lock.rgb(lock.color), bg);
+        }
     }
 
     if (lock.caps_lock) {
-        drawCentered(canvas, cx, cy - radius - 8.0 - 7.0 * text_scale, "CAPS LOCK", ring_color);
+        drawCentered(canvas, cx, cy - status_gap - 7.0 * text_scale, "CAPS LOCK", label_color);
     }
 
     switch (lock.color) {
         .fail => {
             var buf: [32]u8 = undefined;
             const label = std.fmt.bufPrint(&buf, "WRONG PASSWORD ({d})", .{lock.attempt_count}) catch "WRONG PASSWORD";
-            drawCentered(canvas, cx, cy + radius + 16.0, label, ring_color);
+            drawCentered(canvas, cx, cy + status_gap, label, label_color);
         },
-        .verifying => drawCentered(canvas, cx, cy + radius + 16.0, "VERIFYING", ring_color),
+        .verifying => drawCentered(canvas, cx, cy + status_gap, "VERIFYING", label_color),
         else => {},
     }
 
