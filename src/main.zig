@@ -13,6 +13,7 @@ test {
     _ = @import("Secret.zig");
     _ = @import("auth.zig");
     _ = @import("render.zig");
+    _ = @import("background.zig");
 }
 
 const usage =
@@ -30,6 +31,10 @@ const usage =
     \\  -input-alt-color 0xRRGGBB  Set the alternate color used after input.
     \\  -verifying-color 0xRRGGBB  Set the color used while checking the password.
     \\  -fail-color 0xRRGGBB       Set the color used on authentication failure.
+    \\
+    \\  -image <path>              Set a background image (png, bmp, tga, qoi, jpeg).
+    \\  -mode <mode>               Set how the background image is scaled: fill (default),
+    \\                             fit, stretch, center, or tile.
     \\
 ;
 
@@ -49,6 +54,8 @@ pub fn main(init: process.Init) !void {
         .{ .name = "input-alt-color", .kind = .arg },
         .{ .name = "verifying-color", .kind = .arg },
         .{ .name = "fail-color", .kind = .arg },
+        .{ .name = "image", .kind = .arg },
+        .{ .name = "mode", .kind = .arg },
     }).parse(args[1..]) catch {
         std.debug.print("{s}", .{usage});
         process.exit(1);
@@ -96,6 +103,23 @@ pub fn main(init: process.Init) !void {
     if (result.flags.@"input-alt-color") |raw| options.input_alt_color = parseColor(raw);
     if (result.flags.@"verifying-color") |raw| options.verifying_color = parseColor(raw);
     if (result.flags.@"fail-color") |raw| options.fail_color = parseColor(raw);
+    if (result.flags.image) |raw| options.image_path = raw;
+    if (result.flags.mode) |raw| {
+        options.image_mode = if (mem.eql(u8, raw, "fill"))
+            .fill
+        else if (mem.eql(u8, raw, "fit"))
+            .fit
+        else if (mem.eql(u8, raw, "stretch"))
+            .stretch
+        else if (mem.eql(u8, raw, "center"))
+            .center
+        else if (mem.eql(u8, raw, "tile"))
+            .tile
+        else {
+            log.err("invalid mode '{s}', expected one of: fill, fit, stretch, center, tile", .{raw});
+            process.exit(1);
+        };
+    }
 
     const passwd: *pam.struct_passwd = pam.getpwuid(pam.getuid()) orelse {
         log.err("failed to look up the current user", .{});
@@ -104,7 +128,7 @@ pub fn main(init: process.Init) !void {
     const username = try gpa.dupe(u8, mem.sliceTo(passwd.pw_name, 0));
     defer gpa.free(username);
 
-    try Lock.run(gpa, username, options);
+    try Lock.run(gpa, init.io, username, options);
 }
 
 fn parseColor(raw: []const u8) u24 {
