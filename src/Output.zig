@@ -13,6 +13,7 @@ const ext = wayland.client.ext;
 const Lock = @import("Lock.zig");
 const gfx = @import("render.zig");
 const Font = @import("render/font.zig");
+const background = @import("background.zig");
 
 lock: *Lock,
 name: u32,
@@ -59,6 +60,10 @@ pub fn render(output: *Output, lock: *const Lock) void {
     const canvas: gfx.Canvas = .{ .pixels = buffer.pixels, .width = output.width, .height = output.height };
     const bg = lock.options.init_color;
     canvas.fill(bg);
+
+    if (lock.background) |image| {
+        background.composite(canvas, image, lock.options.image_mode, bg);
+    }
 
     const cx: f32 = @as(f32, @floatFromInt(output.width)) / 2.0;
     const cy: f32 = @as(f32, @floatFromInt(output.height)) / 2.0;
