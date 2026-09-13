@@ -33,6 +33,7 @@ const usage =
     \\  -fail-color 0xRRGGBB       Set the color used on authentication failure.
     \\
     \\  -image <path>              Set a background image (png, bmp, tga, qoi, jpeg).
+    \\                             Defaults to a bundled wallpaper if omitted.
     \\  -mode <mode>               Set how the background image is scaled: fill (default),
     \\                             fit, stretch, center, or tile.
     \\
