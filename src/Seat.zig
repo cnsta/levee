@@ -137,6 +137,12 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, seat: *Seat) void
                     0,
                     ev.group,
                 );
+
+                const caps_active = xkb_state.modNameIsActive(
+                    xkb.names.mod.caps,
+                    @enumFromInt(xkb.State.Component.mods_effective),
+                ) == 1;
+                seat.lock.setCapsLock(caps_active);
             }
         },
         .key => |ev| {
@@ -174,7 +180,11 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, seat: *Seat) void
                 },
                 @intFromEnum(xkb.Keysym.BackSpace) => {
                     lock.secret.backspace();
-                    if (lock.secret.isEmpty()) lock.setColor(.init);
+                    if (lock.secret.isEmpty()) {
+                        lock.setColor(.init);
+                    } else {
+                        lock.redrawAll();
+                    }
                     return;
                 },
                 else => {},
@@ -185,7 +195,7 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, seat: *Seat) void
             if (len > 0) {
                 lock.secret.append(scratch[0..len]);
                 switch (lock.color) {
-                    .init, .input_alt, .fail => lock.setColor(.input),
+                    .init, .input_alt, .fail, .verifying => lock.setColor(.input),
                     .input => lock.setColor(.input_alt),
                 }
             }
