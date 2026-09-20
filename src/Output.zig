@@ -27,6 +27,9 @@ height: u31 = undefined,
 
 shm: ?*ShmDoubleBuffer = null,
 
+frame_cb: ?*wl.Callback = null,
+stale: bool = false,
+
 link: wl.list.Link,
 
 pub fn createSurface(output: *Output) !void {
@@ -40,6 +43,7 @@ pub fn createSurface(output: *Output) !void {
 
 pub fn destroy(output: *Output) void {
     output.wl_output.release();
+    if (output.frame_cb) |cb| cb.destroy();
     if (output.lock_surface) |s| s.destroy();
     if (output.surface) |s| s.destroy();
     if (output.shm) |sb| sb.deinitIfIdle();
@@ -61,8 +65,8 @@ pub fn render(output: *Output, lock: *const Lock) void {
     const bg = lock.options.init_color;
     canvas.fill(bg);
 
-    if (lock.background) |image| {
-        background.composite(canvas, image, lock.options.image_mode, bg);
+    if (lock.background) |bgimg| {
+        background.composite(canvas, bgimg.frames[lock.playback.index], lock.options.image_mode, bg);
     }
 
     const cx: f32 = @as(f32, @floatFromInt(output.width)) / 2.0;
@@ -101,11 +105,49 @@ pub fn render(output: *Output, lock: *const Lock) void {
     }
 
     buffer.busy = true;
+    output.stale = false;
 
     const surface = output.surface.?;
     surface.attach(buffer.wl_buffer, 0, 0);
     surface.damageBuffer(0, 0, math.maxInt(i32), math.maxInt(i32));
+
+    if (output.frame_cb == null) {
+        if (lock.background) |bgimg| if (bgimg.isAnimated()) output.requestFrame(surface);
+    }
+
     surface.commit();
+}
+
+fn requestFrame(output: *Output, surface: *wl.Surface) void {
+    const cb = surface.frame() catch {
+        log.warn("out of memory requesting a frame callback, animation will pace itself", .{});
+        return;
+    };
+    cb.setListener(*Output, frameListener, output);
+    output.frame_cb = cb;
+}
+
+fn frameListener(cb: *wl.Callback, event: wl.Callback.Event, output: *Output) void {
+    switch (event) {
+        .done => {
+            cb.destroy();
+            output.frame_cb = null;
+            if (output.stale) output.render(output.lock);
+        },
+    }
+}
+
+pub fn canAnimate(output: *const Output) bool {
+    return output.configured and output.frame_cb == null;
+}
+
+pub fn animate(output: *Output, lock: *const Lock) void {
+    if (!output.configured) return;
+    if (output.frame_cb != null) {
+        output.stale = true;
+        return;
+    }
+    output.render(lock);
 }
 
 const text_scale: f32 = 3.0;
