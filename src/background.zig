@@ -5,6 +5,8 @@ const math = std.math;
 const zigimg = @import("zigimg");
 const gfx = @import("render.zig");
 
+const log = std.log.scoped(.background);
+
 pub const Mode = enum { fill, fit, stretch, center, tile };
 
 pub const DecodedImage = struct {
@@ -18,22 +20,87 @@ pub const DecodedImage = struct {
     }
 };
 
-pub fn load(gpa: mem.Allocator, io: std.Io, path: []const u8) !DecodedImage {
+pub const Background = struct {
+    frames: []DecodedImage,
+    delays_ms: []u32,
+    loop_count: i32,
+
+    pub fn deinit(bg: *Background, gpa: mem.Allocator) void {
+        for (bg.frames) |*frame| frame.deinit(gpa);
+        gpa.free(bg.frames);
+        gpa.free(bg.delays_ms);
+        bg.* = undefined;
+    }
+
+    pub fn isAnimated(bg: Background) bool {
+        return bg.frames.len > 1;
+    }
+};
+
+pub const max_decoded_bytes: usize = 256 * 1024 * 1024;
+
+const min_delay_ms: u32 = 20;
+const fallback_delay_ms: u32 = 100;
+
+pub fn clampDelay(seconds: f32) u32 {
+    if (!(seconds > 0)) return fallback_delay_ms;
+    const ms: u32 = @intFromFloat(@min(@round(seconds * 1000.0), 3_600_000.0));
+    return if (ms < min_delay_ms) fallback_delay_ms else ms;
+}
+
+pub const Playback = struct {
+    index: usize = 0,
+    loops_done: u32 = 0,
+    due_ms: i64 = 0,
+    finished: bool = true,
+
+    pub fn init(bg: Background, now_ms: i64) Playback {
+        return .{
+            .due_ms = now_ms + bg.delays_ms[0],
+            .finished = !bg.isAnimated(),
+        };
+    }
+
+    pub fn timeoutMs(p: Playback, now_ms: i64) ?i32 {
+        if (p.finished) return null;
+        return @intCast(math.clamp(p.due_ms - now_ms, 0, math.maxInt(i32)));
+    }
+
+    pub fn advance(p: *Playback, bg: Background, now_ms: i64) bool {
+        if (p.finished or now_ms < p.due_ms) return false;
+
+        var next = p.index + 1;
+        if (next == bg.frames.len) {
+            if (bg.loop_count >= 0 and p.loops_done >= bg.loop_count) {
+                p.finished = true;
+                return false;
+            }
+            p.loops_done += 1;
+            next = 0;
+        }
+
+        p.index = next;
+        p.due_ms = now_ms + bg.delays_ms[next];
+        return true;
+    }
+};
+
+pub fn load(gpa: mem.Allocator, io: std.Io, path: []const u8) !Background {
     var read_buffer: [zigimg.io.DEFAULT_BUFFER_SIZE]u8 = undefined;
     var image = try zigimg.Image.fromFilePath(gpa, io, path, &read_buffer);
     defer image.deinit(gpa);
-    return normalize(gpa, image);
+    return fromImage(gpa, image);
 }
 
 const default_wallpaper_bytes = @embedFile("assets/wallpaper.gif");
 
-pub fn loadDefault(gpa: mem.Allocator) !DecodedImage {
+pub fn loadDefault(gpa: mem.Allocator) !Background {
     var image = try zigimg.Image.fromMemory(gpa, default_wallpaper_bytes);
     defer image.deinit(gpa);
-    return normalize(gpa, image);
+    return fromImage(gpa, image);
 }
 
-fn normalize(gpa: mem.Allocator, image: zigimg.Image) !DecodedImage {
+fn fromImage(gpa: mem.Allocator, image: zigimg.Image) !Background {
     if (image.width == 0 or image.height == 0) return error.EmptyImage;
     if (image.width > math.maxInt(u31) or image.height > math.maxInt(u31)) {
         return error.ImageTooLarge;
@@ -41,12 +108,52 @@ fn normalize(gpa: mem.Allocator, image: zigimg.Image) !DecodedImage {
 
     const w: u32 = @intCast(image.width);
     const h: u32 = @intCast(image.height);
-    const pixels = try gpa.alloc(u8, @as(usize, w) * @as(usize, h) * 4);
+
+    var count: usize = if (image.isAnimation()) image.animation.frames.items.len else 1;
+    const frame_bytes = @as(usize, w) * @as(usize, h) * 4;
+    if (count > 1 and count *| frame_bytes > max_decoded_bytes) {
+        log.warn(
+            "animation has {d} frames of {d}x{d}, over the {d} MiB decode budget; showing only the first frame",
+            .{ count, w, h, max_decoded_bytes / (1024 * 1024) },
+        );
+        count = 1;
+    }
+
+    const frames = try gpa.alloc(DecodedImage, count);
+    var made: usize = 0;
+    errdefer {
+        for (frames[0..made]) |*frame| frame.deinit(gpa);
+        gpa.free(frames);
+    }
+    const delays = try gpa.alloc(u32, count);
+    errdefer gpa.free(delays);
+
+    if (image.isAnimation()) {
+        for (image.animation.frames.items[0..count], 0..) |frame, i| {
+            frames[i] = try normalize(gpa, w, h, &frame.pixels);
+            made += 1;
+            delays[i] = clampDelay(frame.duration);
+        }
+    } else {
+        frames[0] = try normalize(gpa, w, h, &image.pixels);
+        made += 1;
+        delays[0] = fallback_delay_ms;
+    }
+
+    return .{ .frames = frames, .delays_ms = delays, .loop_count = image.animation.loop_count };
+}
+
+fn normalize(gpa: mem.Allocator, w: u32, h: u32, storage: *const zigimg.color.PixelStorage) !DecodedImage {
+    const total = @as(usize, w) * @as(usize, h);
+    if (storage.len() < total) return error.TruncatedFrame;
+
+    const pixels = try gpa.alloc(u8, total * 4);
     errdefer gpa.free(pixels);
 
-    var it = image.iterator();
+    var it = zigimg.color.PixelStorageIterator.init(storage);
     var i: usize = 0;
     while (it.next()) |c| : (i += 1) {
+        if (i == total) break;
         pixels[i * 4 + 0] = to8(c.r);
         pixels[i * 4 + 1] = to8(c.g);
         pixels[i * 4 + 2] = to8(c.b);
@@ -173,13 +280,107 @@ fn putPixel(canvas: gfx.Canvas, x: i32, y: i32, image: DecodedImage, sx: u32, sy
 
 const testing = std.testing;
 
-test "loadDefault decodes the embedded wallpaper into a sane RGBA8 buffer" {
-    var image = try loadDefault(testing.allocator);
-    defer image.deinit(testing.allocator);
+test "loadDefault decodes the embedded animated wallpaper into sane RGBA8 frames" {
+    var bg = try loadDefault(testing.allocator);
+    defer bg.deinit(testing.allocator);
 
-    try testing.expect(image.width > 0);
-    try testing.expect(image.height > 0);
-    try testing.expectEqual(@as(usize, image.width) * image.height * 4, image.pixels.len);
+    try testing.expect(bg.isAnimated());
+    try testing.expectEqual(bg.frames.len, bg.delays_ms.len);
+
+    const first = bg.frames[0];
+    try testing.expect(first.width > 0);
+    try testing.expect(first.height > 0);
+
+    for (bg.frames, bg.delays_ms) |frame, delay| {
+        try testing.expectEqual(first.width, frame.width);
+        try testing.expectEqual(first.height, frame.height);
+        try testing.expectEqual(@as(usize, frame.width) * frame.height * 4, frame.pixels.len);
+        try testing.expect(delay >= min_delay_ms);
+    }
+
+    try testing.expect(!mem.eql(u8, bg.frames[0].pixels, bg.frames[1].pixels));
+}
+
+test "clampDelay treats zero and tiny GIF delays as 100ms" {
+    try testing.expectEqual(@as(u32, 100), clampDelay(0.0));
+    try testing.expectEqual(@as(u32, 100), clampDelay(0.01));
+    try testing.expectEqual(@as(u32, 100), clampDelay(-1.0));
+    try testing.expectEqual(@as(u32, 100), clampDelay(std.math.nan(f32)));
+    try testing.expectEqual(@as(u32, 20), clampDelay(0.02));
+    try testing.expectEqual(@as(u32, 600), clampDelay(0.6));
+}
+
+fn testBackground(frames: []DecodedImage, delays: []u32, loop_count: i32) Background {
+    return .{ .frames = frames, .delays_ms = delays, .loop_count = loop_count };
+}
+
+test "Playback: a single frame never schedules anything" {
+    var px = [_]u8{ 0, 0, 0, 255 };
+    var frames = [_]DecodedImage{testImage(&px, 1, 1)};
+    var delays = [_]u32{100};
+    const bg = testBackground(&frames, &delays, -1);
+
+    var p = Playback.init(bg, 0);
+    try testing.expectEqual(@as(?i32, null), p.timeoutMs(0));
+    try testing.expect(!p.advance(bg, 10_000));
+    try testing.expectEqual(@as(usize, 0), p.index);
+}
+
+test "Playback: advances only once the delay has elapsed, then wraps forever" {
+    var px = [_]u8{ 0, 0, 0, 255 };
+    var frames = [_]DecodedImage{ testImage(&px, 1, 1), testImage(&px, 1, 1) };
+    var delays = [_]u32{ 100, 300 };
+    const bg = testBackground(&frames, &delays, -1);
+
+    var p = Playback.init(bg, 1000);
+    try testing.expectEqual(@as(?i32, 100), p.timeoutMs(1000));
+    try testing.expectEqual(@as(?i32, 40), p.timeoutMs(1060));
+    try testing.expect(!p.advance(bg, 1099));
+
+    try testing.expect(p.advance(bg, 1100));
+    try testing.expectEqual(@as(usize, 1), p.index);
+    try testing.expectEqual(@as(?i32, 300), p.timeoutMs(1100));
+
+    try testing.expect(p.advance(bg, 1400));
+    try testing.expectEqual(@as(usize, 0), p.index);
+    try testing.expect(!p.finished);
+}
+
+test "Playback: a late wakeup shows one new frame, not the whole backlog" {
+    var px = [_]u8{ 0, 0, 0, 255 };
+    var frames = [_]DecodedImage{ testImage(&px, 1, 1), testImage(&px, 1, 1), testImage(&px, 1, 1) };
+    var delays = [_]u32{ 100, 100, 100 };
+    const bg = testBackground(&frames, &delays, -1);
+
+    var p = Playback.init(bg, 0);
+    try testing.expect(p.advance(bg, 60_000));
+    try testing.expectEqual(@as(usize, 1), p.index);
+    try testing.expectEqual(@as(?i32, 100), p.timeoutMs(60_000));
+}
+
+test "Playback: a finite loop count holds the last frame" {
+    var px = [_]u8{ 0, 0, 0, 255 };
+    var frames = [_]DecodedImage{ testImage(&px, 1, 1), testImage(&px, 1, 1) };
+    var delays = [_]u32{ 100, 100 };
+
+    // 0 = play once.
+    var once = Playback.init(testBackground(&frames, &delays, 0), 0);
+    const bg_once = testBackground(&frames, &delays, 0);
+    try testing.expect(once.advance(bg_once, 100));
+    try testing.expect(!once.advance(bg_once, 200));
+    try testing.expect(once.finished);
+    try testing.expectEqual(@as(usize, 1), once.index);
+    try testing.expectEqual(@as(?i32, null), once.timeoutMs(200));
+
+    // 1 = one repeat, two plays in total.
+    const bg_twice = testBackground(&frames, &delays, 1);
+    var twice = Playback.init(bg_twice, 0);
+    try testing.expect(twice.advance(bg_twice, 100)); // -> frame 1
+    try testing.expect(twice.advance(bg_twice, 200)); // wraps to frame 0
+    try testing.expectEqual(@as(usize, 0), twice.index);
+    try testing.expect(twice.advance(bg_twice, 300)); // -> frame 1
+    try testing.expect(!twice.advance(bg_twice, 400)); // out of loops
+    try testing.expect(twice.finished);
 }
 
 test "placement: stretch always maps to the full buffer regardless of image size" {
