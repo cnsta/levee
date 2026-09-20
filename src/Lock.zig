@@ -28,8 +28,8 @@ pub const Options = struct {
     ready_fd: ?posix.fd_t = null,
     ignore_empty_password: bool = false,
     init_color: u24 = 0x002b36,
-    input_color: u24 = 0x6c71c4,
-    input_alt_color: u24 = 0x6c71c4,
+    input_color: u24 = 0xe02200,
+    input_alt_color: u24 = 0xe02200,
     verifying_color: u24 = 0x268bd2,
     fail_color: u24 = 0xdc322f,
     image_path: ?[]const u8 = null,
@@ -52,7 +52,9 @@ caps_lock: bool = false,
 attempt_count: u32 = 0,
 secret: Secret,
 in_flight: ?auth.Attempt = null,
-background: ?bgimg.DecodedImage = null,
+io: std.Io,
+background: ?bgimg.Background = null,
+playback: bgimg.Playback = .{},
 
 pollfds: [2]posix.pollfd,
 
@@ -68,7 +70,7 @@ outputs: wl.list.Head(Output, .link),
 xkb_context: *xkb.Context,
 
 pub fn run(gpa: mem.Allocator, io: std.Io, username: []const u8, options: Options) !void {
-    var background_image: ?bgimg.DecodedImage = null;
+    var background_image: ?bgimg.Background = null;
     if (options.image_path) |path| {
         background_image = bgimg.load(gpa, io, path) catch |err| blk: {
             log.warn(
@@ -99,9 +101,12 @@ pub fn run(gpa: mem.Allocator, io: std.Io, username: []const u8, options: Option
         .seats = undefined,
         .outputs = undefined,
         .xkb_context = xkb.Context.new(.no_flags) orelse fatalOom(),
+        .io = io,
         .background = background_image,
     };
     defer lock.deinit();
+
+    if (lock.background) |bg| lock.playback = .init(bg, lock.nowMs());
 
     lock.seats.init();
     lock.outputs.init();
@@ -152,7 +157,7 @@ pub fn run(gpa: mem.Allocator, io: std.Io, username: []const u8, options: Option
         else
             .{ .fd = -1, .events = 0, .revents = 0 };
 
-        _ = posix.poll(&lock.pollfds, -1) catch |err| {
+        _ = posix.poll(&lock.pollfds, lock.animationTimeoutMs()) catch |err| {
             fatal("poll() failed: {s}", .{@errorName(err)});
         };
 
@@ -174,6 +179,8 @@ pub fn run(gpa: mem.Allocator, io: std.Io, username: []const u8, options: Option
                 lock.setColor(.fail);
             }
         }
+
+        lock.tickAnimation();
     }
 
     const errno = lock.display.roundtrip();
@@ -364,6 +371,31 @@ pub fn setCapsLock(lock: *Lock, active: bool) void {
 pub fn redrawAll(lock: *Lock) void {
     var it = list.safeIterator(Output, .link, &lock.outputs);
     while (it.next()) |output| output.render(lock);
+}
+
+fn nowMs(lock: *const Lock) i64 {
+    return std.Io.Clock.now(.awake, lock.io).toMilliseconds();
+}
+
+fn animationTimeoutMs(lock: *Lock) i32 {
+    if (lock.background == null) return -1;
+
+    var ready = false;
+    var it = list.safeIterator(Output, .link, &lock.outputs);
+    while (it.next()) |output| {
+        if (output.canAnimate()) ready = true;
+    }
+    if (!ready) return -1;
+
+    return lock.playback.timeoutMs(lock.nowMs()) orelse -1;
+}
+
+fn tickAnimation(lock: *Lock) void {
+    const bg = lock.background orelse return;
+    if (!lock.playback.advance(bg, lock.nowMs())) return;
+
+    var it = list.safeIterator(Output, .link, &lock.outputs);
+    while (it.next()) |output| output.animate(lock);
 }
 
 fn fatalOom() noreturn {

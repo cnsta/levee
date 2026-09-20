@@ -25,7 +25,7 @@ pub fn load(gpa: mem.Allocator, io: std.Io, path: []const u8) !DecodedImage {
     return normalize(gpa, image);
 }
 
-const default_wallpaper_bytes = @embedFile("assets/wallpaper.jpg");
+const default_wallpaper_bytes = @embedFile("assets/wallpaper.gif");
 
 pub fn loadDefault(gpa: mem.Allocator) !DecodedImage {
     var image = try zigimg.Image.fromMemory(gpa, default_wallpaper_bytes);
