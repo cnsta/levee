@@ -32,8 +32,9 @@ const usage =
     \\  -verifying-color 0xRRGGBB  Set the color used while checking the password.
     \\  -fail-color 0xRRGGBB       Set the color used on authentication failure.
     \\
-    \\  -image <path>              Set a background image (png, bmp, tga, qoi, jpeg).
-    \\                             Defaults to a bundled wallpaper if omitted.
+    \\  -image <path>              Set a background image (png, bmp, tga, qoi, jpeg, gif).
+    \\                             An animated gif plays. Defaults to a bundled
+    \\                             animated wallpaper if omitted.
     \\  -mode <mode>               Set how the background image is scaled: fill (default),
     \\                             fit, stretch, center, or tile.
     \\
