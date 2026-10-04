@@ -14,6 +14,8 @@ test {
     _ = @import("auth.zig");
     _ = @import("render.zig");
     _ = @import("background.zig");
+    _ = @import("video.zig");
+    _ = @import("video/mp4.zig");
 }
 
 const usage =
@@ -24,6 +26,8 @@ const usage =
     \\
     \\  -ready-fd <fd>             Write a newline to fd once the session is locked
     \\                             (for a swayidle-driven wrapper to synchronize on).
+    \\  -fork-on-lock              Fork to the background once the session is locked
+    \\                             (lets `swayidle -w` carry on while locked).
     \\  -ignore-empty-password     Do not validate an empty password.
     \\
     \\  -init-color 0xRRGGBB       Set the initial color.
@@ -32,9 +36,9 @@ const usage =
     \\  -verifying-color 0xRRGGBB  Set the color used while checking the password.
     \\  -fail-color 0xRRGGBB       Set the color used on authentication failure.
     \\
-    \\  -image <path>              Set a background image (png, bmp, tga, qoi, jpeg, gif).
-    \\                             An animated gif plays. Defaults to a bundled
-    \\                             animated wallpaper if omitted.
+    \\  -image <path>              Set a background image (png, bmp, tga, qoi, jpeg, gif)
+    \\                             or a VP8/VP9 video in .mp4. Animated gifs and videos
+    \\                             play. Defaults to a bundled looping video.
     \\  -mode <mode>               Set how the background image is scaled: fill (default),
     \\                             fit, stretch, center, or tile.
     \\
@@ -50,6 +54,7 @@ pub fn main(init: process.Init) !void {
         .{ .name = "h", .kind = .boolean },
         .{ .name = "log-level", .kind = .arg },
         .{ .name = "ready-fd", .kind = .arg },
+        .{ .name = "fork-on-lock", .kind = .boolean },
         .{ .name = "ignore-empty-password", .kind = .boolean },
         .{ .name = "init-color", .kind = .arg },
         .{ .name = "input-color", .kind = .arg },
@@ -90,6 +95,7 @@ pub fn main(init: process.Init) !void {
 
     var options: Lock.Options = .{
         .ignore_empty_password = result.flags.@"ignore-empty-password",
+        .fork_on_lock = result.flags.@"fork-on-lock",
     };
     if (result.flags.@"ready-fd") |raw| {
         options.ready_fd = std.fmt.parseInt(posix.fd_t, raw, 10) catch {
