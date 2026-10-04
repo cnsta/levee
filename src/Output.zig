@@ -9,6 +9,7 @@ const system = std.posix.system;
 const wayland = @import("wayland");
 const wl = wayland.client.wl;
 const ext = wayland.client.ext;
+const wp = wayland.client.wp;
 
 const Lock = @import("Lock.zig");
 const gfx = @import("render.zig");
@@ -20,6 +21,11 @@ name: u32,
 wl_output: *wl.Output,
 surface: ?*wl.Surface = null,
 lock_surface: ?*ext.SessionLockSurfaceV1 = null,
+
+fade_surface: ?*wl.Surface = null,
+fade_subsurface: ?*wl.Subsurface = null,
+fade_viewport: ?*wp.Viewport = null,
+fade_alpha: u32 = 0,
 
 configured: bool = false,
 width: u31 = undefined,
@@ -39,11 +45,58 @@ pub fn createSurface(output: *Output) !void {
     const lock_surface = try output.lock.session_lock.?.getLockSurface(surface, output.wl_output);
     lock_surface.setListener(*Output, lockSurfaceListener, output);
     output.lock_surface = lock_surface;
+
+    if (output.lock.fade != null) output.createFadeSurface(surface) catch {
+        log.err("out of memory creating the fade surface, not fading on this output", .{});
+    };
+}
+
+fn createFadeSurface(output: *Output, parent: *wl.Surface) !void {
+    const lock = output.lock;
+
+    const surface = try lock.compositor.?.createSurface();
+    output.fade_surface = surface;
+
+    const region = try lock.compositor.?.createRegion();
+    surface.setInputRegion(region);
+    region.destroy();
+
+    const subsurface = try lock.subcompositor.?.getSubsurface(surface, parent);
+    output.fade_subsurface = subsurface;
+    subsurface.setDesync();
+
+    output.fade_viewport = try lock.viewporter.?.getViewport(surface);
+}
+
+pub fn setFade(output: *Output, lock: *const Lock, alpha: f32) void {
+    if (!output.configured) return;
+    const surface = output.fade_surface orelse return;
+
+    const value: u32 = @intFromFloat(@round(@as(f64, math.clamp(alpha, 0, 1)) * math.maxInt(u32)));
+    if (value == output.fade_alpha) return;
+
+    if (value == 0) {
+        surface.attach(null, 0, 0);
+    } else {
+        const buffer = lock.single_pixel.?.createU32RgbaBuffer(0, 0, 0, value) catch {
+            log.warn("out of memory stepping the fade", .{});
+            return;
+        };
+        output.fade_viewport.?.setDestination(output.width, output.height);
+        surface.attach(buffer, 0, 0);
+        surface.damageBuffer(0, 0, math.maxInt(i32), math.maxInt(i32));
+        buffer.destroy();
+    }
+    surface.commit();
+    output.fade_alpha = value;
 }
 
 pub fn destroy(output: *Output) void {
     output.wl_output.release();
     if (output.frame_cb) |cb| cb.destroy();
+    if (output.fade_viewport) |v| v.destroy();
+    if (output.fade_subsurface) |s| s.destroy();
+    if (output.fade_surface) |s| s.destroy();
     if (output.lock_surface) |s| s.destroy();
     if (output.surface) |s| s.destroy();
     if (output.shm) |sb| sb.deinitIfIdle();
@@ -185,6 +238,11 @@ fn lockSurfaceListener(
                 return;
             };
             output.render(output.lock);
+
+            if (output.fade_alpha != 0) {
+                output.fade_viewport.?.setDestination(output.width, output.height);
+                output.fade_surface.?.commit();
+            }
         },
     }
 }
