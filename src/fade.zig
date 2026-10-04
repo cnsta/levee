@@ -24,7 +24,8 @@ pub const Fade = struct {
     pub fn alpha(f: Fade, now_ms: i64) f32 {
         const start = f.start_ms orelse return 0;
         const elapsed: f32 = @floatFromInt(@max(0, now_ms - start));
-        return @min(1, elapsed / @as(f32, @floatFromInt(f.duration_ms)));
+        const t = @min(1, elapsed / @as(f32, @floatFromInt(f.duration_ms)));
+        return t * t * t;
     }
 
     pub fn timeoutMs(f: Fade, now_ms: i64) ?i32 {
@@ -48,17 +49,31 @@ test "Fade.init: ends at end_s, shortened when end_s is shorter" {
     try testing.expectEqual(@as(?Fade, null), Fade.init(20, 0));
 }
 
-test "Fade: transparent until idle, linear, then stops ticking at black" {
+test "Fade: transparent until idle, eased in, then stops ticking at black" {
     var f = Fade.init(10, 10).?;
     try testing.expectEqual(@as(f32, 0), f.alpha(5_000));
     try testing.expectEqual(@as(?i32, null), f.timeoutMs(5_000));
 
     f.start_ms = 1_000;
-    try testing.expectEqual(@as(f32, 0.5), f.alpha(6_000));
+    try testing.expectEqual(@as(f32, 0.125), f.alpha(6_000));
     try testing.expectEqual(@as(?i32, Fade.tick_ms), f.timeoutMs(6_000));
     try testing.expectEqual(@as(f32, 1), f.alpha(30_000));
     try testing.expectEqual(@as(?i32, null), f.timeoutMs(30_000));
 
     f.start_ms = null;
     try testing.expectEqual(@as(f32, 0), f.alpha(30_000));
+}
+
+test "Fade: alpha rises monotonically and is black at the end" {
+    var f = Fade.init(20, 20).?;
+    f.start_ms = 0;
+
+    var last: f32 = 0;
+    var now: i64 = 0;
+    while (now <= 20_000) : (now += Fade.tick_ms) {
+        const a = f.alpha(now);
+        try testing.expect(a >= last);
+        last = a;
+    }
+    try testing.expectEqual(@as(f32, 1), f.alpha(20_000));
 }
