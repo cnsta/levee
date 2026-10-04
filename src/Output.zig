@@ -75,19 +75,18 @@ pub fn setFade(output: *Output, lock: *const Lock, alpha: f32) void {
     const value: u32 = @intFromFloat(@round(@as(f64, math.clamp(alpha, 0, 1)) * math.maxInt(u32)));
     if (value == output.fade_alpha) return;
 
-    if (value == 0) {
-        surface.attach(null, 0, 0);
-    } else {
-        const buffer = lock.single_pixel.?.createU32RgbaBuffer(0, 0, 0, value) catch {
+    var buffer: ?*wl.Buffer = null;
+    if (value != 0) {
+        buffer = lock.single_pixel.?.createU32RgbaBuffer(0, 0, 0, value) catch {
             log.warn("out of memory stepping the fade", .{});
             return;
         };
         output.fade_viewport.?.setDestination(output.width, output.height);
-        surface.attach(buffer, 0, 0);
         surface.damageBuffer(0, 0, math.maxInt(i32), math.maxInt(i32));
-        buffer.destroy();
     }
+    surface.attach(buffer, 0, 0);
     surface.commit();
+    if (buffer) |b| b.destroy();
     output.fade_alpha = value;
 }
 

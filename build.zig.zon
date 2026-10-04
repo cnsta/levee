@@ -1,6 +1,6 @@
 .{
     .name = .levee,
-    .version = "0.1.2",
+    .version = "0.1.3",
     .fingerprint = 0xe33674b71e7e219f,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
