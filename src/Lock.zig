@@ -12,6 +12,7 @@ const fatal = process.fatal;
 const wayland = @import("wayland");
 const wl = wayland.client.wl;
 const ext = wayland.client.ext;
+const wp = wayland.client.wp;
 
 const xkb = @import("xkbcommon");
 
@@ -21,6 +22,7 @@ const Output = @import("Output.zig");
 const Seat = @import("Seat.zig");
 const list = @import("util/list.zig");
 const bgimg = @import("background.zig");
+const Fade = @import("fade.zig").Fade;
 
 pub const Color = enum { init, input, input_alt, verifying, fail };
 
@@ -35,6 +37,8 @@ pub const Options = struct {
     fail_color: u24 = 0xdc322f,
     image_path: ?[]const u8 = null,
     image_mode: bgimg.Mode = .fill,
+    fade_end_s: u32 = 20,
+    fade_duration_s: u32 = 20,
 };
 
 gpa: mem.Allocator,
@@ -56,14 +60,19 @@ in_flight: ?auth.Attempt = null,
 io: std.Io,
 background: ?bgimg.Background = null,
 playback: bgimg.Playback = .{},
+fade: ?Fade = null,
 
 pollfds: [2]posix.pollfd,
 
 display: *wl.Display,
 compositor: ?*wl.Compositor = null,
+subcompositor: ?*wl.Subcompositor = null,
 shm: ?*wl.Shm = null,
 session_lock_manager: ?*ext.SessionLockManagerV1 = null,
 session_lock: ?*ext.SessionLockV1 = null,
+idle_notifier: ?*ext.IdleNotifierV1 = null,
+single_pixel: ?*wp.SinglePixelBufferManagerV1 = null,
+viewporter: ?*wp.Viewporter = null,
 
 seats: wl.list.Head(Seat, .link),
 outputs: wl.list.Head(Output, .link),
@@ -131,6 +140,14 @@ pub fn run(gpa: mem.Allocator, io: std.Io, username: []const u8, options: Option
     if (lock.shm == null) fatalNotAdvertised(wl.Shm);
     if (lock.session_lock_manager == null) fatalNotAdvertised(ext.SessionLockManagerV1);
 
+    if (lock.subcompositor == null or lock.idle_notifier == null or
+        lock.single_pixel == null or lock.viewporter == null)
+    {
+        log.info("compositor lacks a protocol the fade to black needs, not fading", .{});
+    } else {
+        lock.fade = .init(options.fade_duration_s, options.fade_end_s);
+    }
+
     lock.session_lock = lock.session_lock_manager.?.lock() catch fatalOom();
     lock.session_lock.?.setListener(*Lock, sessionLockListener, &lock);
 
@@ -158,7 +175,7 @@ pub fn run(gpa: mem.Allocator, io: std.Io, username: []const u8, options: Option
         else
             .{ .fd = -1, .events = 0, .revents = 0 };
 
-        _ = posix.poll(&lock.pollfds, lock.animationTimeoutMs()) catch |err| {
+        _ = posix.poll(&lock.pollfds, lock.pollTimeoutMs()) catch |err| {
             fatal("poll() failed: {s}", .{@errorName(err)});
         };
 
@@ -182,6 +199,7 @@ pub fn run(gpa: mem.Allocator, io: std.Io, username: []const u8, options: Option
         }
 
         lock.tickAnimation();
+        lock.tickFade();
     }
 
     const errno = lock.display.roundtrip();
@@ -222,7 +240,11 @@ fn flushWaylandAndPrepareRead(lock: *Lock) void {
 fn deinit(lock: *Lock) void {
     if (lock.background) |*bg| bg.deinit(lock.gpa);
     if (lock.compositor) |c| c.destroy();
+    if (lock.subcompositor) |s| s.destroy();
     if (lock.shm) |s| s.destroy();
+    if (lock.idle_notifier) |n| n.destroy();
+    if (lock.single_pixel) |s| s.destroy();
+    if (lock.viewporter) |v| v.destroy();
 
     assert(lock.session_lock_manager == null);
     assert(lock.session_lock == null);
@@ -250,6 +272,14 @@ fn handleRegistryEvent(lock: *Lock, registry: *wl.Registry, event: wl.Registry.E
             if (mem.orderZ(u8, ev.interface, wl.Compositor.interface.name) == .eq) {
                 if (ev.version < 4) fatal("advertised wl_compositor version too old, need >= 4", .{});
                 lock.compositor = try registry.bind(ev.name, wl.Compositor, 4);
+            } else if (mem.orderZ(u8, ev.interface, wl.Subcompositor.interface.name) == .eq) {
+                lock.subcompositor = try registry.bind(ev.name, wl.Subcompositor, 1);
+            } else if (mem.orderZ(u8, ev.interface, ext.IdleNotifierV1.interface.name) == .eq) {
+                lock.idle_notifier = try registry.bind(ev.name, ext.IdleNotifierV1, 1);
+            } else if (mem.orderZ(u8, ev.interface, wp.SinglePixelBufferManagerV1.interface.name) == .eq) {
+                lock.single_pixel = try registry.bind(ev.name, wp.SinglePixelBufferManagerV1, 1);
+            } else if (mem.orderZ(u8, ev.interface, wp.Viewporter.interface.name) == .eq) {
+                lock.viewporter = try registry.bind(ev.name, wp.Viewporter, 1);
             } else if (mem.orderZ(u8, ev.interface, wl.Shm.interface.name) == .eq) {
                 lock.shm = try registry.bind(ev.name, wl.Shm, 1);
             } else if (mem.orderZ(u8, ev.interface, ext.SessionLockManagerV1.interface.name) == .eq) {
@@ -288,6 +318,7 @@ fn handleRegistryEvent(lock: *Lock, registry: *wl.Registry, event: wl.Registry.E
             while (seat_it.next()) |seat| {
                 if (seat.name == ev.name) {
                     seat.destroy();
+                    lock.updateIdle();
                     break;
                 }
             }
@@ -312,6 +343,8 @@ fn sessionLockListener(_: *ext.SessionLockV1, event: ext.SessionLockV1.Event, lo
                 forkToBackground();
                 lock.secret.protect();
             }
+            var it = lock.seats.iterator(.forward);
+            while (it.next()) |seat| seat.watchIdle();
         },
         .finished => {
             switch (lock.state) {
@@ -382,24 +415,34 @@ fn nowMs(lock: *const Lock) i64 {
     return std.Io.Clock.now(.awake, lock.io).toMilliseconds();
 }
 
-fn animationTimeoutMs(lock: *Lock) i32 {
-    if (lock.background == null) return -1;
+fn pollTimeoutMs(lock: *Lock) i32 {
+    const now = lock.nowMs();
+    const anim = lock.animationTimeoutMs(now);
+    const fade = if (lock.fade) |f| f.timeoutMs(now) else null;
+    if (anim != null and fade != null) return @min(anim.?, fade.?);
+    return anim orelse fade orelse -1;
+}
+
+fn animationTimeoutMs(lock: *Lock, now: i64) ?i32 {
+    if (lock.background == null) return null;
+    if (lock.isBlack(now)) return null;
 
     var ready = false;
     var it = list.safeIterator(Output, .link, &lock.outputs);
     while (it.next()) |output| {
         if (output.canAnimate()) ready = true;
     }
-    if (!ready) return -1;
+    if (!ready) return null;
 
-    return lock.playback.timeoutMs(lock.nowMs()) orelse -1;
+    return lock.playback.timeoutMs(now);
 }
 
 fn tickAnimation(lock: *Lock) void {
     const bg = lock.background orelse return;
-    if (!lock.playback.advance(bg, lock.nowMs())) return;
+    const now = lock.nowMs();
+    if (lock.isBlack(now)) return;
+    if (!lock.playback.advance(bg, now)) return;
     bg.show(lock.playback.index) catch |err| {
-        // keep the last good frame up rather than redrawing a broken one.
         log.warn("background playback stopped: {s}", .{@errorName(err)});
         lock.playback.finished = true;
         return;
@@ -407,6 +450,39 @@ fn tickAnimation(lock: *Lock) void {
 
     var it = list.safeIterator(Output, .link, &lock.outputs);
     while (it.next()) |output| output.animate(lock);
+}
+
+fn isBlack(lock: *const Lock, now: i64) bool {
+    const fade = lock.fade orelse return false;
+    return fade.alpha(now) >= 1;
+}
+
+pub fn updateIdle(lock: *Lock) void {
+    const fade = if (lock.fade) |*f| f else return;
+
+    var watched = false;
+    var all_idle = true;
+    var it = lock.seats.iterator(.forward);
+    while (it.next()) |seat| {
+        if (seat.idle_notification == null) continue;
+        watched = true;
+        if (!seat.idle) all_idle = false;
+    }
+
+    if (watched and all_idle) {
+        if (fade.start_ms == null) fade.start_ms = lock.nowMs();
+    } else if (fade.start_ms != null) {
+        fade.start_ms = null;
+        lock.tickFade();
+    }
+}
+
+fn tickFade(lock: *Lock) void {
+    const fade = lock.fade orelse return;
+    const alpha = fade.alpha(lock.nowMs());
+
+    var it = list.safeIterator(Output, .link, &lock.outputs);
+    while (it.next()) |output| output.setFade(lock, alpha);
 }
 
 fn fatalOom() noreturn {

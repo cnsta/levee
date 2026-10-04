@@ -7,12 +7,19 @@ pub fn build(b: *std.Build) void {
     const scanner = @import("wayland").Scanner.create(b, .{});
 
     scanner.addCustomProtocol(b.path("protocol/ext-session-lock-v1.xml"));
+    scanner.addSystemProtocol("staging/ext-idle-notify/ext-idle-notify-v1.xml");
+    scanner.addSystemProtocol("staging/single-pixel-buffer/single-pixel-buffer-v1.xml");
+    scanner.addSystemProtocol("stable/viewporter/viewporter.xml");
 
     scanner.generate("wl_compositor", 4);
+    scanner.generate("wl_subcompositor", 1);
     scanner.generate("wl_shm", 1);
     scanner.generate("wl_seat", 7);
     scanner.generate("wl_output", 4);
     scanner.generate("ext_session_lock_manager_v1", 1);
+    scanner.generate("ext_idle_notifier_v1", 1);
+    scanner.generate("wp_single_pixel_buffer_manager_v1", 1);
+    scanner.generate("wp_viewporter", 1);
 
     const wayland = b.createModule(.{ .root_source_file = scanner.result });
     const xkbcommon = b.dependency("xkbcommon", .{}).module("xkbcommon");
