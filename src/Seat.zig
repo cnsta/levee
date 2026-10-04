@@ -7,6 +7,7 @@ const system = std.posix.system;
 
 const wayland = @import("wayland");
 const wl = wayland.client.wl;
+const ext = wayland.client.ext;
 
 const xkb = @import("xkbcommon");
 
@@ -18,6 +19,8 @@ wl_seat: *wl.Seat,
 wl_pointer: ?*wl.Pointer = null,
 wl_keyboard: ?*wl.Keyboard = null,
 xkb_state: ?*xkb.State = null,
+idle_notification: ?*ext.IdleNotificationV1 = null,
+idle: bool = false,
 
 link: wl.list.Link,
 
@@ -34,6 +37,7 @@ pub fn create(lock: *Lock, name: u32, wl_seat: *wl.Seat) !void {
     lock.seats.prepend(seat);
 
     wl_seat.setListener(*Seat, seatListener, seat);
+    if (lock.state == .locked) seat.watchIdle();
 }
 
 pub fn destroy(seat: *Seat) void {
@@ -41,9 +45,31 @@ pub fn destroy(seat: *Seat) void {
     if (seat.wl_pointer) |p| p.release();
     if (seat.wl_keyboard) |k| k.release();
     if (seat.xkb_state) |s| s.unref();
+    if (seat.idle_notification) |n| n.destroy();
 
     seat.link.remove();
     seat.lock.gpa.destroy(seat);
+}
+
+pub fn watchIdle(seat: *Seat) void {
+    const fade = seat.lock.fade orelse return;
+    if (seat.idle_notification != null) return;
+
+    const n = seat.lock.idle_notifier.?.getIdleNotification(@max(1, fade.delay_ms), seat.wl_seat) catch {
+        log.err("failed to allocate an idle notification, not fading", .{});
+        return;
+    };
+    n.setListener(*Seat, idleListener, seat);
+    seat.idle_notification = n;
+    seat.idle = false;
+}
+
+fn idleListener(_: *ext.IdleNotificationV1, event: ext.IdleNotificationV1.Event, seat: *Seat) void {
+    seat.idle = switch (event) {
+        .idled => true,
+        .resumed => false,
+    };
+    seat.lock.updateIdle();
 }
 
 fn seatListener(wl_seat: *wl.Seat, event: wl.Seat.Event, seat: *Seat) void {
