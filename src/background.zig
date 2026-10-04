@@ -4,6 +4,8 @@ const math = std.math;
 
 const zigimg = @import("zigimg");
 const gfx = @import("render.zig");
+const Video = @import("video.zig");
+const mp4 = @import("video/mp4.zig");
 
 const log = std.log.scoped(.background);
 
@@ -13,6 +15,7 @@ pub const DecodedImage = struct {
     width: u32,
     height: u32,
     pixels: []u8,
+    @"opaque": bool = false,
 
     pub fn deinit(image: *DecodedImage, gpa: mem.Allocator) void {
         gpa.free(image.pixels);
@@ -21,19 +24,61 @@ pub const DecodedImage = struct {
 };
 
 pub const Background = struct {
-    frames: []DecodedImage,
-    delays_ms: []u32,
+    source: Source,
     loop_count: i32,
 
+    pub const Source = union(enum) {
+        frames: Frames,
+        video: *Video,
+    };
+
+    pub const Frames = struct {
+        images: []DecodedImage,
+        delays_ms: []u32,
+    };
+
     pub fn deinit(bg: *Background, gpa: mem.Allocator) void {
-        for (bg.frames) |*frame| frame.deinit(gpa);
-        gpa.free(bg.frames);
-        gpa.free(bg.delays_ms);
+        switch (bg.source) {
+            .frames => |f| {
+                for (f.images) |*image| image.deinit(gpa);
+                gpa.free(f.images);
+                gpa.free(f.delays_ms);
+            },
+            .video => |v| v.destroy(),
+        }
         bg.* = undefined;
     }
 
+    pub fn frameCount(bg: Background) usize {
+        return switch (bg.source) {
+            .frames => |f| f.images.len,
+            .video => |v| v.frameCount(),
+        };
+    }
+
+    pub fn delayMs(bg: Background, index: usize) u32 {
+        return switch (bg.source) {
+            .frames => |f| f.delays_ms[index],
+            .video => |v| v.delayMs(index),
+        };
+    }
+
     pub fn isAnimated(bg: Background) bool {
-        return bg.frames.len > 1;
+        return bg.frameCount() > 1;
+    }
+
+    pub fn current(bg: Background, index: usize) DecodedImage {
+        return switch (bg.source) {
+            .frames => |f| f.images[index],
+            .video => |v| v.frame,
+        };
+    }
+
+    pub fn show(bg: Background, index: usize) !void {
+        switch (bg.source) {
+            .frames => {},
+            .video => |v| try v.decode(index),
+        }
     }
 };
 
@@ -56,7 +101,7 @@ pub const Playback = struct {
 
     pub fn init(bg: Background, now_ms: i64) Playback {
         return .{
-            .due_ms = now_ms + bg.delays_ms[0],
+            .due_ms = now_ms + bg.delayMs(0),
             .finished = !bg.isAnimated(),
         };
     }
@@ -70,7 +115,7 @@ pub const Playback = struct {
         if (p.finished or now_ms < p.due_ms) return false;
 
         var next = p.index + 1;
-        if (next == bg.frames.len) {
+        if (next == bg.frameCount()) {
             if (bg.loop_count >= 0 and p.loops_done >= bg.loop_count) {
                 p.finished = true;
                 return false;
@@ -80,22 +125,32 @@ pub const Playback = struct {
         }
 
         p.index = next;
-        p.due_ms = now_ms + bg.delays_ms[next];
+        p.due_ms = now_ms + bg.delayMs(next);
         return true;
     }
 };
 
+pub const max_file_bytes: usize = 512 * 1024 * 1024;
+
 pub fn load(gpa: mem.Allocator, io: std.Io, path: []const u8) !Background {
-    var read_buffer: [zigimg.io.DEFAULT_BUFFER_SIZE]u8 = undefined;
-    var image = try zigimg.Image.fromFilePath(gpa, io, path, &read_buffer);
-    defer image.deinit(gpa);
-    return fromImage(gpa, image);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(max_file_bytes));
+    if (mp4.sniff(bytes)) return fromVideo(gpa, bytes, true);
+    defer gpa.free(bytes);
+    return loadImage(gpa, bytes);
 }
 
-const default_wallpaper_bytes = @embedFile("assets/wallpaper.gif");
+const default_wallpaper_bytes = @embedFile("assets/wallpaper.mp4");
 
 pub fn loadDefault(gpa: mem.Allocator) !Background {
-    var image = try zigimg.Image.fromMemory(gpa, default_wallpaper_bytes);
+    return fromVideo(gpa, default_wallpaper_bytes, false);
+}
+
+fn fromVideo(gpa: mem.Allocator, bytes: []const u8, owned: bool) !Background {
+    return .{ .source = .{ .video = try Video.create(gpa, bytes, owned) }, .loop_count = -1 };
+}
+
+fn loadImage(gpa: mem.Allocator, bytes: []const u8) !Background {
+    var image = try zigimg.Image.fromMemory(gpa, bytes);
     defer image.deinit(gpa);
     return fromImage(gpa, image);
 }
@@ -140,7 +195,10 @@ fn fromImage(gpa: mem.Allocator, image: zigimg.Image) !Background {
         delays[0] = fallback_delay_ms;
     }
 
-    return .{ .frames = frames, .delays_ms = delays, .loop_count = image.animation.loop_count };
+    return .{
+        .source = .{ .frames = .{ .images = frames, .delays_ms = delays } },
+        .loop_count = image.animation.loop_count,
+    };
 }
 
 fn normalize(gpa: mem.Allocator, w: u32, h: u32, storage: *const zigimg.color.PixelStorage) !DecodedImage {
@@ -152,15 +210,17 @@ fn normalize(gpa: mem.Allocator, w: u32, h: u32, storage: *const zigimg.color.Pi
 
     var it = zigimg.color.PixelStorageIterator.init(storage);
     var i: usize = 0;
+    var all_opaque = true;
     while (it.next()) |c| : (i += 1) {
         if (i == total) break;
         pixels[i * 4 + 0] = to8(c.r);
         pixels[i * 4 + 1] = to8(c.g);
         pixels[i * 4 + 2] = to8(c.b);
         pixels[i * 4 + 3] = to8(c.a);
+        all_opaque = all_opaque and pixels[i * 4 + 3] == 255;
     }
 
-    return .{ .width = w, .height = h, .pixels = pixels };
+    return .{ .width = w, .height = h, .pixels = pixels, .@"opaque" = all_opaque };
 }
 
 fn to8(v: f32) u8 {
@@ -239,18 +299,46 @@ fn compositeScaled(canvas: gfx.Canvas, image: DecodedImage, p: Placement, bg: gf
     const img_w_f: f32 = @floatFromInt(image.width);
     const img_h_f: f32 = @floatFromInt(image.height);
 
+    var columns_buf: [max_columns]u32 = undefined;
+    const span: usize = @intCast(@max(x1 - x0, 0));
+    const columns: ?[]u32 = if (span <= max_columns) columns_buf[0..span] else null;
+    if (columns) |cols| for (cols, 0..) |*sx_out, i| {
+        const x: i32 = x0 + @as(i32, @intCast(i));
+        const u = (@as(f32, @floatFromInt(x - p.dst_x)) + 0.5) / dst_w_f;
+        sx_out.* = @intFromFloat(@min(u * img_w_f, img_w_f - 1.0));
+    };
+
+    var prev_sy: ?u32 = null;
     var y = y0;
     while (y < y1) : (y += 1) {
         const v = (@as(f32, @floatFromInt(y - p.dst_y)) + 0.5) / dst_h_f;
         const sy: u32 = @intFromFloat(@min(v * img_h_f, img_h_f - 1.0));
+        if (image.@"opaque") if (columns) |cols| {
+            const row = canvas.pixels[@as(usize, @intCast(y)) * canvas.width + @as(usize, @intCast(x0)) ..][0..cols.len];
+            if (prev_sy == sy) {
+                @memcpy(row, (row.ptr - canvas.width)[0..cols.len]);
+            } else {
+                const src = image.pixels[@as(usize, sy) * image.width * 4 ..];
+                for (row, cols) |*px, sx| {
+                    const s = src[@as(usize, sx) * 4 ..][0..3];
+                    px.* = (@as(u32, s[0]) << 16) | (@as(u32, s[1]) << 8) | s[2];
+                }
+            }
+            prev_sy = sy;
+            continue;
+        };
         var x = x0;
         while (x < x1) : (x += 1) {
-            const u = (@as(f32, @floatFromInt(x - p.dst_x)) + 0.5) / dst_w_f;
-            const sx: u32 = @intFromFloat(@min(u * img_w_f, img_w_f - 1.0));
+            const sx: u32 = if (columns) |cols| cols[@intCast(x - x0)] else blk: {
+                const u = (@as(f32, @floatFromInt(x - p.dst_x)) + 0.5) / dst_w_f;
+                break :blk @intFromFloat(@min(u * img_w_f, img_w_f - 1.0));
+            };
             putPixel(canvas, x, y, image, sx, sy, bg);
         }
     }
 }
+
+const max_columns = 8192;
 
 fn compositeTile(canvas: gfx.Canvas, image: DecodedImage, bg: gfx.Color) void {
     var y: i32 = 0;
@@ -280,25 +368,41 @@ fn putPixel(canvas: gfx.Canvas, x: i32, y: i32, image: DecodedImage, sx: u32, sy
 
 const testing = std.testing;
 
-test "loadDefault decodes the embedded animated wallpaper into sane RGBA8 frames" {
-    var bg = try loadDefault(testing.allocator);
+test "the bundled GIF decodes into sane RGBA8 frames" {
+    var bg = try loadImage(testing.allocator, @embedFile("assets/wallpaper.gif"));
     defer bg.deinit(testing.allocator);
 
     try testing.expect(bg.isAnimated());
-    try testing.expectEqual(bg.frames.len, bg.delays_ms.len);
+    const f = bg.source.frames;
+    try testing.expectEqual(f.images.len, f.delays_ms.len);
 
-    const first = bg.frames[0];
+    const first = f.images[0];
     try testing.expect(first.width > 0);
     try testing.expect(first.height > 0);
 
-    for (bg.frames, bg.delays_ms) |frame, delay| {
+    for (f.images, f.delays_ms) |frame, delay| {
         try testing.expectEqual(first.width, frame.width);
         try testing.expectEqual(first.height, frame.height);
         try testing.expectEqual(@as(usize, frame.width) * frame.height * 4, frame.pixels.len);
         try testing.expect(delay >= min_delay_ms);
     }
 
-    try testing.expect(!mem.eql(u8, bg.frames[0].pixels, bg.frames[1].pixels));
+    try testing.expect(!mem.eql(u8, f.images[0].pixels, f.images[1].pixels));
+}
+
+test "loadDefault plays the bundled video forever, one frame at a time" {
+    var bg = try loadDefault(testing.allocator);
+    defer bg.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 720), bg.frameCount());
+    try testing.expectEqual(@as(i32, -1), bg.loop_count);
+    try testing.expectEqual(@as(u32, 1920), bg.current(0).width);
+
+    var p = Playback.init(bg, 0);
+    try testing.expectEqual(@as(?i32, 33), p.timeoutMs(0));
+    try testing.expect(p.advance(bg, 40));
+    try bg.show(p.index);
+    try testing.expectEqual(@as(usize, 1), p.index);
 }
 
 test "clampDelay treats zero and tiny GIF delays as 100ms" {
@@ -311,7 +415,7 @@ test "clampDelay treats zero and tiny GIF delays as 100ms" {
 }
 
 fn testBackground(frames: []DecodedImage, delays: []u32, loop_count: i32) Background {
-    return .{ .frames = frames, .delays_ms = delays, .loop_count = loop_count };
+    return .{ .source = .{ .frames = .{ .images = frames, .delays_ms = delays } }, .loop_count = loop_count };
 }
 
 test "Playback: a single frame never schedules anything" {
@@ -446,4 +550,19 @@ test "composite: tile repeats a 1x1 image across a larger canvas" {
     var px = [_]u8{ 0x10, 0x20, 0x30, 255 };
     composite(canvas, testImage(&px, 1, 1), .tile, 0x000000);
     for (buf) |p| try testing.expectEqual(@as(u32, 0x102030), p);
+}
+
+test "composite: the opaque fast path draws exactly what the general path draws" {
+    var px: [3 * 2 * 4]u8 = undefined;
+    for (&px, 0..) |*b, i| b.* = if (i % 4 == 3) 255 else @intCast(i * 37 % 256);
+
+    for ([_]Mode{ .fill, .fit, .stretch, .center }) |mode| {
+        var slow: [7 * 5]u32 = @splat(0x010203);
+        var fast: [7 * 5]u32 = @splat(0x010203);
+        var image = testImage(&px, 3, 2);
+        composite(.{ .pixels = &slow, .width = 7, .height = 5 }, image, mode, 0x010203);
+        image.@"opaque" = true;
+        composite(.{ .pixels = &fast, .width = 7, .height = 5 }, image, mode, 0x010203);
+        try testing.expectEqualSlices(u32, &slow, &fast);
+    }
 }
