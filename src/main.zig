@@ -16,6 +16,7 @@ test {
     _ = @import("background.zig");
     _ = @import("video.zig");
     _ = @import("video/mp4.zig");
+    _ = @import("fade.zig");
 }
 
 const usage =
@@ -42,6 +43,11 @@ const usage =
     \\  -mode <mode>               Set how the background image is scaled: fill (default),
     \\                             fit, stretch, center, or tile.
     \\
+    \\  -fade-end <seconds>        Idle seconds after locking at which the screen is fully
+    \\                             black (default 20). Match the idle blank timeout.
+    \\  -fade-duration <seconds>   Fade to black over this long, ending at -fade-end
+    \\                             (default 20, capped at -fade-end; 0 disables).
+    \\
 ;
 
 pub fn main(init: process.Init) !void {
@@ -63,6 +69,8 @@ pub fn main(init: process.Init) !void {
         .{ .name = "fail-color", .kind = .arg },
         .{ .name = "image", .kind = .arg },
         .{ .name = "mode", .kind = .arg },
+        .{ .name = "fade-end", .kind = .arg },
+        .{ .name = "fade-duration", .kind = .arg },
     }).parse(args[1..]) catch {
         std.debug.print("{s}", .{usage});
         process.exit(1);
@@ -129,6 +137,9 @@ pub fn main(init: process.Init) !void {
         };
     }
 
+    if (result.flags.@"fade-end") |raw| options.fade_end_s = parseSeconds(raw);
+    if (result.flags.@"fade-duration") |raw| options.fade_duration_s = parseSeconds(raw);
+
     const passwd: *pam.struct_passwd = pam.getpwuid(pam.getuid()) orelse {
         log.err("failed to look up the current user", .{});
         process.exit(1);
@@ -142,6 +153,13 @@ pub fn main(init: process.Init) !void {
 fn parseColor(raw: []const u8) u24 {
     if (raw.len != 8 or !mem.eql(u8, raw[0..2], "0x")) fatalBadColor(raw);
     return std.fmt.parseUnsigned(u24, raw[2..], 16) catch fatalBadColor(raw);
+}
+
+fn parseSeconds(raw: []const u8) u32 {
+    return std.fmt.parseUnsigned(u32, raw, 10) catch {
+        log.err("invalid number of seconds '{s}'", .{raw});
+        process.exit(1);
+    };
 }
 
 fn fatalBadColor(raw: []const u8) noreturn {
