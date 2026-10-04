@@ -26,6 +26,7 @@ pub const Color = enum { init, input, input_alt, verifying, fail };
 
 pub const Options = struct {
     ready_fd: ?posix.fd_t = null,
+    fork_on_lock: bool = false,
     ignore_empty_password: bool = false,
     init_color: u24 = 0x002b36,
     input_color: u24 = 0xe02200,
@@ -307,6 +308,10 @@ fn sessionLockListener(_: *ext.SessionLockV1, event: ext.SessionLockV1.Event, lo
                 _ = system.close(fd);
                 lock.options.ready_fd = null;
             }
+            if (lock.options.fork_on_lock) {
+                forkToBackground();
+                lock.secret.protect();
+            }
         },
         .finished => {
             switch (lock.state) {
@@ -393,6 +398,12 @@ fn animationTimeoutMs(lock: *Lock) i32 {
 fn tickAnimation(lock: *Lock) void {
     const bg = lock.background orelse return;
     if (!lock.playback.advance(bg, lock.nowMs())) return;
+    bg.show(lock.playback.index) catch |err| {
+        // keep the last good frame up rather than redrawing a broken one.
+        log.warn("background playback stopped: {s}", .{@errorName(err)});
+        lock.playback.finished = true;
+        return;
+    };
 
     var it = list.safeIterator(Output, .link, &lock.outputs);
     while (it.next()) |output| output.animate(lock);
@@ -404,4 +415,21 @@ fn fatalOom() noreturn {
 
 fn fatalNotAdvertised(comptime Global: type) noreturn {
     fatal("{s} not advertised by the compositor", .{Global.interface.name});
+}
+
+fn forkToBackground() void {
+    const rc = system.fork();
+    switch (posix.errno(rc)) {
+        .SUCCESS => {},
+        else => |err| fatal("fork() failed: E{s}", .{@tagName(err)}),
+    }
+    if (rc != 0) process.exit(0);
+
+    // can't fail: the child of a fork() is never a process group leader.
+    _ = system.setsid();
+    // don't keep some other filesystem busy, not worth aborting the lock over.
+    switch (posix.errno(system.chdir("/"))) {
+        .SUCCESS => {},
+        else => |err| log.warn("failed to change working directory to / after fork: E{s}", .{@tagName(err)}),
+    }
 }
