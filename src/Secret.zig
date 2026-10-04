@@ -11,9 +11,13 @@ len: usize = 0,
 
 pub fn init() Secret {
     var secret: Secret = .{};
+    secret.protect();
+    return secret;
+}
+
+pub fn protect(secret: *Secret) void {
     lockAgainstSwap(&secret.buf);
     excludeFromCoreDumpsBestEffort(&secret.buf);
-    return secret;
 }
 
 fn lockAgainstSwap(buf: []align(heap.page_size_max) const u8) void {

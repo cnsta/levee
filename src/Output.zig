@@ -66,7 +66,7 @@ pub fn render(output: *Output, lock: *const Lock) void {
     canvas.fill(bg);
 
     if (lock.background) |bgimg| {
-        background.composite(canvas, bgimg.frames[lock.playback.index], lock.options.image_mode, bg);
+        background.composite(canvas, bgimg.current(lock.playback.index), lock.options.image_mode, bg);
     }
 
     const cx: f32 = @as(f32, @floatFromInt(output.width)) / 2.0;
