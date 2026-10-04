@@ -7,6 +7,7 @@
   wayland,
   wayland-scanner,
   wayland-protocols,
+  libvpx,
   pam,
   zon2nix,
   zig,
@@ -15,6 +16,7 @@
     wayland
     libxkbcommon
     pam
+    libvpx
   ];
 in
   mkShell {

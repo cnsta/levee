@@ -26,6 +26,14 @@ pub fn build(b: *std.Build) void {
     });
     addNixIncludePaths(b, pam);
 
+    const vpx = b.addTranslateC(.{
+        .root_source_file = b.path("src/vpx.h"),
+        .optimize = optimize,
+        .target = target,
+        .link_libc = true,
+    });
+    addNixIncludePaths(b, vpx);
+
     const exe = b.addExecutable(.{
         .name = "levee",
         .root_module = b.createModule(.{
@@ -38,6 +46,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "xkbcommon", .module = xkbcommon },
                 .{ .name = "zigimg", .module = zigimg },
                 .{ .name = "pam", .module = pam.createModule() },
+                .{ .name = "vpx", .module = vpx.createModule() },
             },
         }),
     });
@@ -48,6 +57,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.linkSystemLibrary("wayland-client", .{});
     exe.root_module.linkSystemLibrary("xkbcommon", .{});
     exe.root_module.linkSystemLibrary("pam", .{});
+    exe.root_module.linkSystemLibrary("vpx", .{});
     b.installArtifact(exe);
 
     const install_prefix = std.fs.path.resolve(b.allocator, &.{b.install_prefix}) catch @panic("OOM");

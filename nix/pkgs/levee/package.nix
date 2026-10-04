@@ -6,6 +6,7 @@
   wayland,
   wayland-protocols,
   wayland-scanner,
+  libvpx,
   pam,
   pkg-config,
   callPackage,
@@ -38,6 +39,7 @@ stdenv.mkDerivation (finalAttrs: {
     libxkbcommon
     wayland
     pam
+    libvpx
   ];
 
   zigBuildFlags = [
