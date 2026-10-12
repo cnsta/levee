@@ -17,6 +17,7 @@ test {
     _ = @import("video.zig");
     _ = @import("video/mp4.zig");
     _ = @import("fade.zig");
+    _ = @import("spinner.zig");
 }
 
 const usage =
