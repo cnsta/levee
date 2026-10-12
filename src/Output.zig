@@ -15,12 +15,17 @@ const Lock = @import("Lock.zig");
 const gfx = @import("render.zig");
 const Font = @import("render/font.zig");
 const background = @import("background.zig");
+const spinner = @import("spinner.zig");
 
 lock: *Lock,
 name: u32,
 wl_output: *wl.Output,
 surface: ?*wl.Surface = null,
 lock_surface: ?*ext.SessionLockSurfaceV1 = null,
+
+spinner_surface: ?*wl.Surface = null,
+spinner_subsurface: ?*wl.Subsurface = null,
+spinner_frame: ?spinner.Frame = null,
 
 fade_surface: ?*wl.Surface = null,
 fade_subsurface: ?*wl.Subsurface = null,
@@ -46,9 +51,43 @@ pub fn createSurface(output: *Output) !void {
     lock_surface.setListener(*Output, lockSurfaceListener, output);
     output.lock_surface = lock_surface;
 
+    output.createSpinnerSurface(surface) catch {
+        log.err("out of memory creating the spinner surface, not showing it on this output", .{});
+    };
+
     if (output.lock.fade != null) output.createFadeSurface(surface) catch {
         log.err("out of memory creating the fade surface, not fading on this output", .{});
     };
+}
+
+fn createSpinnerSurface(output: *Output, parent: *wl.Surface) !void {
+    const lock = output.lock;
+
+    const surface = try lock.compositor.?.createSurface();
+    output.spinner_surface = surface;
+
+    const region = try lock.compositor.?.createRegion();
+    surface.setInputRegion(region);
+    region.destroy();
+
+    const subsurface = try lock.subcompositor.?.getSubsurface(surface, parent);
+    output.spinner_subsurface = subsurface;
+    subsurface.setDesync();
+}
+
+pub fn setSpinner(output: *Output, lock: *const Lock, frame: ?spinner.Frame) void {
+    if (!output.configured) return;
+    const surface = output.spinner_surface orelse return;
+    if (std.meta.eql(frame, output.spinner_frame)) return;
+
+    var buffer: ?*wl.Buffer = null;
+    if (frame) |i| {
+        buffer = lock.spinner_buffers[i] orelse return;
+        surface.damageBuffer(0, 0, spinner.width, spinner.height);
+    }
+    surface.attach(buffer, 0, 0);
+    surface.commit();
+    output.spinner_frame = frame;
 }
 
 fn createFadeSurface(output: *Output, parent: *wl.Surface) !void {
@@ -96,6 +135,8 @@ pub fn destroy(output: *Output) void {
     if (output.fade_viewport) |v| v.destroy();
     if (output.fade_subsurface) |s| s.destroy();
     if (output.fade_surface) |s| s.destroy();
+    if (output.spinner_subsurface) |s| s.destroy();
+    if (output.spinner_surface) |s| s.destroy();
     if (output.lock_surface) |s| s.destroy();
     if (output.surface) |s| s.destroy();
     if (output.shm) |sb| sb.deinitIfIdle();
@@ -106,6 +147,15 @@ pub fn destroy(output: *Output) void {
 
 pub fn render(output: *Output, lock: *const Lock) void {
     if (!output.configured) return;
+
+    const cx: f32 = @as(f32, @floatFromInt(output.width)) / 2.0;
+    const cy: f32 = @as(f32, @floatFromInt(output.height)) * 0.6;
+
+    if (output.spinner_subsurface) |sub| {
+        sub.setPosition(@as(i32, @intFromFloat(cx)) - spinner.width / 2, @as(i32, @intFromFloat(cy)) - spinner.height / 2);
+    }
+    output.setSpinner(lock, lock.spinner.frame(lock.nowMs()));
+
     const sb = output.shm orelse return;
 
     const buffer = sb.pickFree() orelse {
@@ -121,8 +171,6 @@ pub fn render(output: *Output, lock: *const Lock) void {
         background.composite(canvas, bgimg.current(lock.playback.index), lock.options.image_mode, bg);
     }
 
-    const cx: f32 = @as(f32, @floatFromInt(output.width)) / 2.0;
-    const cy: f32 = @as(f32, @floatFromInt(output.height)) * 0.6;
     const min_dim: f32 = @floatFromInt(@min(output.width, output.height));
     const label_color: gfx.Color = 0x93a1a1;
     const status_gap: f32 = min_dim * 0.05;
@@ -154,7 +202,6 @@ pub fn render(output: *Output, lock: *const Lock) void {
             const label = std.fmt.bufPrint(&buf, "WRONG PASSWORD ({d})", .{lock.attempt_count}) catch "WRONG PASSWORD";
             drawCentered(canvas, cx, row_y, label, label_color);
         },
-        .verifying => drawCentered(canvas, cx, row_y, "VERIFYING...", label_color),
         else => {},
     }
 
