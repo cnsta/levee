@@ -23,6 +23,7 @@ const Seat = @import("Seat.zig");
 const list = @import("util/list.zig");
 const bgimg = @import("background.zig");
 const Fade = @import("fade.zig").Fade;
+const spin = @import("spinner.zig");
 
 pub const Color = enum { init, input, input_alt, verifying, fail };
 
@@ -31,9 +32,9 @@ pub const Options = struct {
     fork_on_lock: bool = false,
     ignore_empty_password: bool = false,
     init_color: u24 = 0x002b36,
-    input_color: u24 = 0xe02200,
-    input_alt_color: u24 = 0xe02200,
-    verifying_color: u24 = 0x268bd2,
+    input_color: u24 = 0x93a1a1,
+    input_alt_color: u24 = 0x93a1a1,
+    verifying_color: u24 = 0x6FAAD1,
     fail_color: u24 = 0xdc322f,
     image_path: ?[]const u8 = null,
     image_mode: bgimg.Mode = .fill,
@@ -49,6 +50,7 @@ state: enum {
     initializing,
     locking,
     locked,
+    unlocking,
     exiting,
 } = .initializing,
 
@@ -61,6 +63,8 @@ io: std.Io,
 background: ?bgimg.Background = null,
 playback: bgimg.Playback = .{},
 fade: ?Fade = null,
+spinner: spin.Spinner = .{},
+spinner_buffers: [spin.frames.len]?*wl.Buffer = @splat(null),
 
 pollfds: [2]posix.pollfd,
 
@@ -138,9 +142,14 @@ pub fn run(gpa: mem.Allocator, io: std.Io, username: []const u8, options: Option
 
     if (lock.compositor == null) fatalNotAdvertised(wl.Compositor);
     if (lock.shm == null) fatalNotAdvertised(wl.Shm);
+    if (lock.subcompositor == null) fatalNotAdvertised(wl.Subcompositor);
     if (lock.session_lock_manager == null) fatalNotAdvertised(ext.SessionLockManagerV1);
 
-    if (lock.subcompositor == null or lock.idle_notifier == null or
+    lock.createSpinnerBuffers() catch |err| {
+        log.err("failed to create the spinner buffers: {s} (not showing it)", .{@errorName(err)});
+    };
+
+    if (lock.idle_notifier == null or
         lock.single_pixel == null or lock.viewporter == null)
     {
         log.info("compositor lacks a protocol the fade to black needs, not fading", .{});
@@ -190,16 +199,22 @@ pub fn run(gpa: mem.Allocator, io: std.Io, username: []const u8, options: Option
             const attempt = lock.in_flight.?;
             lock.in_flight = null;
             if (auth.finish(attempt)) {
-                lock.session_lock.?.unlockAndDestroy();
-                lock.session_lock = null;
-                lock.state = .exiting;
+                lock.state = .unlocking;
             } else {
                 lock.setColor(.fail);
             }
         }
 
+        if (lock.state == .unlocking and lock.nowMs() >= (lock.spinner.cycleEndMs() orelse 0)) {
+            lock.session_lock.?.unlockAndDestroy();
+            lock.session_lock = null;
+            lock.state = .exiting;
+            break;
+        }
+
         lock.tickAnimation();
         lock.tickFade();
+        lock.tickSpinner();
     }
 
     const errno = lock.display.roundtrip();
@@ -245,6 +260,7 @@ fn deinit(lock: *Lock) void {
     if (lock.idle_notifier) |n| n.destroy();
     if (lock.single_pixel) |s| s.destroy();
     if (lock.viewporter) |v| v.destroy();
+    for (lock.spinner_buffers) |b| if (b) |buffer| buffer.destroy();
 
     assert(lock.session_lock_manager == null);
     assert(lock.session_lock == null);
@@ -297,7 +313,7 @@ fn handleRegistryEvent(lock: *Lock, registry: *wl.Registry, event: wl.Registry.E
 
                 switch (lock.state) {
                     .initializing, .exiting => {},
-                    .locking, .locked => try output.createSurface(),
+                    .locking, .locked, .unlocking => try output.createSurface(),
                 }
             } else if (mem.orderZ(u8, ev.interface, wl.Seat.interface.name) == .eq) {
                 if (ev.version < 5) fatal("advertised wl_seat version too old, need >= 5", .{});
@@ -354,7 +370,7 @@ fn sessionLockListener(_: *ext.SessionLockV1, event: ext.SessionLockV1.Event, lo
                         "(is another ext-session-lock client already running?)", .{});
                     process.exit(1);
                 },
-                .locked => {
+                .locked, .unlocking => {
                     log.info("the compositor unlocked the session, exiting", .{});
                     process.exit(0);
                 },
@@ -396,6 +412,7 @@ pub fn rgb(lock: *const Lock, color: Color) u24 {
 pub fn setColor(lock: *Lock, color: Color) void {
     if (lock.color == color) return;
     lock.color = color;
+    if (color == .verifying) lock.spinner.start(lock.nowMs()) else lock.spinner.stop();
     if (color == .fail) lock.attempt_count += 1;
     lock.redrawAll();
 }
@@ -411,16 +428,23 @@ pub fn redrawAll(lock: *Lock) void {
     while (it.next()) |output| output.render(lock);
 }
 
-fn nowMs(lock: *const Lock) i64 {
+pub fn nowMs(lock: *const Lock) i64 {
     return std.Io.Clock.now(.awake, lock.io).toMilliseconds();
 }
 
 fn pollTimeoutMs(lock: *Lock) i32 {
     const now = lock.nowMs();
-    const anim = lock.animationTimeoutMs(now);
-    const fade = if (lock.fade) |f| f.timeoutMs(now) else null;
-    if (anim != null and fade != null) return @min(anim.?, fade.?);
-    return anim orelse fade orelse -1;
+    // a pending unlock is due at a cycle end, which is a spinner frame boundary.
+    const timeouts = [_]?i32{
+        lock.animationTimeoutMs(now),
+        if (lock.fade) |f| f.timeoutMs(now) else null,
+        lock.spinner.timeoutMs(now),
+    };
+    var min: ?i32 = null;
+    for (timeouts) |t| {
+        if (t) |ms| min = @min(min orelse ms, ms);
+    }
+    return min orelse -1;
 }
 
 fn animationTimeoutMs(lock: *Lock, now: i64) ?i32 {
@@ -450,6 +474,39 @@ fn tickAnimation(lock: *Lock) void {
 
     var it = list.safeIterator(Output, .link, &lock.outputs);
     while (it.next()) |output| output.animate(lock);
+}
+
+fn tickSpinner(lock: *Lock) void {
+    const frame = lock.spinner.frame(lock.nowMs()) orelse return;
+    var it = list.safeIterator(Output, .link, &lock.outputs);
+    while (it.next()) |output| output.setSpinner(lock, frame);
+}
+
+/// renders every frame once up front, a tick only attaches one of these.
+fn createSpinnerBuffers(lock: *Lock) !void {
+    const size = spin.frame_pixels * 4 * spin.frames.len;
+
+    const fd = try posix.memfd_create("levee-spinner", posix.MFD.CLOEXEC);
+    defer _ = system.close(fd);
+    switch (posix.errno(system.ftruncate(fd, size))) {
+        .SUCCESS => {},
+        else => |e| return posix.unexpectedErrno(e),
+    }
+
+    const bytes = try posix.mmap(null, size, .{ .READ = true, .WRITE = true }, .{ .TYPE = .SHARED }, fd, 0);
+    defer posix.munmap(bytes);
+    const pixels = mem.bytesAsSlice(u32, bytes);
+    for (spin.frames, 0..) |mask, i| {
+        const frame = pixels[i * spin.frame_pixels ..][0..spin.frame_pixels];
+        spin.renderFrame(frame, mask, lock.options.verifying_color);
+    }
+
+    const pool = try lock.shm.?.createPool(fd, size);
+    defer pool.destroy();
+    for (&lock.spinner_buffers, 0..) |*b, i| {
+        const offset = i * spin.frame_pixels * 4;
+        b.* = try pool.createBuffer(@intCast(offset), spin.width, spin.height, spin.stride, .argb8888);
+    }
 }
 
 fn isBlack(lock: *const Lock, now: i64) bool {

@@ -127,32 +127,34 @@ pub fn render(output: *Output, lock: *const Lock) void {
     const label_color: gfx.Color = 0x93a1a1;
     const status_gap: f32 = min_dim * 0.05;
 
+    const scale: i32 = @intFromFloat(text_scale);
+    const glyph_h: f32 = @floatFromInt(Font.height * scale);
+    const row_y: f32 = cy - glyph_h / 2.0;
+
     const dot_count = std.unicode.utf8CountCodepoints(lock.secret.slice()) catch lock.secret.len;
     if (dot_count > 0) {
-        const scale: i32 = @intFromFloat(text_scale);
         const advance: f32 = @floatFromInt((Font.width + 1) * scale);
         const count_f: f32 = @floatFromInt(dot_count);
         const row_width: f32 = count_f * advance - @as(f32, @floatFromInt(scale));
         const start_x: f32 = cx - row_width / 2.0;
-        const y0: f32 = cy - @as(f32, @floatFromInt(Font.height * scale)) / 2.0;
         var i: usize = 0;
         while (i < dot_count) : (i += 1) {
             const glyph_x: i32 = @intFromFloat(start_x + advance * @as(f32, @floatFromInt(i)));
-            canvas.drawGlyph(glyph_x, @intFromFloat(y0), '*', lock.rgb(lock.color), scale);
+            canvas.drawGlyph(glyph_x, @intFromFloat(row_y), '*', lock.rgb(lock.color), scale);
         }
     }
 
     if (lock.caps_lock) {
-        drawCentered(canvas, cx, cy - status_gap - 7.0 * text_scale, "CAPS LOCK", label_color);
+        drawCentered(canvas, cx, row_y - status_gap - glyph_h, "CAPS LOCK", label_color);
     }
 
     switch (lock.color) {
         .fail => {
             var buf: [32]u8 = undefined;
             const label = std.fmt.bufPrint(&buf, "WRONG PASSWORD ({d})", .{lock.attempt_count}) catch "WRONG PASSWORD";
-            drawCentered(canvas, cx, cy + status_gap, label, label_color);
+            drawCentered(canvas, cx, row_y, label, label_color);
         },
-        .verifying => drawCentered(canvas, cx, cy + status_gap, "VERIFYING", label_color),
+        .verifying => drawCentered(canvas, cx, row_y, "VERIFYING...", label_color),
         else => {},
     }
 
