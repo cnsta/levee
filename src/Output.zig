@@ -83,7 +83,7 @@ pub fn setSpinner(output: *Output, lock: *const Lock, frame: ?spinner.Frame) voi
     var buffer: ?*wl.Buffer = null;
     if (frame) |i| {
         buffer = lock.spinner_buffers[i] orelse return;
-        surface.damageBuffer(0, 0, spinner.width, spinner.height);
+        surface.damageBuffer(0, 0, @intCast(spinner.stripWidth(lock.spinner_count)), spinner.cell);
     }
     surface.attach(buffer, 0, 0);
     surface.commit();
@@ -151,8 +151,16 @@ pub fn render(output: *Output, lock: *const Lock) void {
     const cx: f32 = @as(f32, @floatFromInt(output.width)) / 2.0;
     const cy: f32 = @as(f32, @floatFromInt(output.height)) * 0.6;
 
+    const scale: i32 = @intFromFloat(text_scale);
+    const glyph_h: f32 = @floatFromInt(Font.height * scale);
+    const row_y: f32 = cy - glyph_h / 2.0;
+
     if (output.spinner_subsurface) |sub| {
-        sub.setPosition(@as(i32, @intFromFloat(cx)) - spinner.width / 2, @as(i32, @intFromFloat(cy)) - spinner.height / 2);
+        const ink: f32 = asterisk_ink_centre * text_scale - spinner.cell / 2;
+        sub.setPosition(
+            @intFromFloat(@floor(rowStartX(cx, lock.spinner_count) + ink)),
+            @intFromFloat(@floor(row_y + ink)),
+        );
     }
     output.setSpinner(lock, lock.spinner.frame(lock.nowMs()));
 
@@ -175,16 +183,9 @@ pub fn render(output: *Output, lock: *const Lock) void {
     const label_color: gfx.Color = 0x93a1a1;
     const status_gap: f32 = min_dim * 0.05;
 
-    const scale: i32 = @intFromFloat(text_scale);
-    const glyph_h: f32 = @floatFromInt(Font.height * scale);
-    const row_y: f32 = cy - glyph_h / 2.0;
-
     const dot_count = std.unicode.utf8CountCodepoints(lock.secret.slice()) catch lock.secret.len;
     if (dot_count > 0) {
-        const advance: f32 = @floatFromInt((Font.width + 1) * scale);
-        const count_f: f32 = @floatFromInt(dot_count);
-        const row_width: f32 = count_f * advance - @as(f32, @floatFromInt(scale));
-        const start_x: f32 = cx - row_width / 2.0;
+        const start_x = rowStartX(cx, dot_count);
         var i: usize = 0;
         while (i < dot_count) : (i += 1) {
             const glyph_x: i32 = @intFromFloat(start_x + advance * @as(f32, @floatFromInt(i)));
@@ -252,6 +253,17 @@ pub fn animate(output: *Output, lock: *const Lock) void {
 }
 
 const text_scale: f32 = 3.0;
+const advance: f32 = (Font.width + 1) * text_scale;
+const asterisk_ink_centre: f32 = 3.5;
+
+comptime {
+    std.debug.assert(spinner.cell == advance);
+}
+
+fn rowStartX(cx: f32, count: usize) f32 {
+    const row_width = @as(f32, @floatFromInt(count)) * advance - text_scale;
+    return cx - row_width / 2.0;
+}
 
 fn drawCentered(canvas: gfx.Canvas, cx: f32, y: f32, label: []const u8, color: gfx.Color) void {
     const scale: i32 = @intFromFloat(text_scale);

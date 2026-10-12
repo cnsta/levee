@@ -34,7 +34,7 @@ pub const Options = struct {
     init_color: u24 = 0x002b36,
     input_color: u24 = 0x93a1a1,
     input_alt_color: u24 = 0x93a1a1,
-    verifying_color: u24 = 0x6FAAD1,
+    verifying_color: u24 = 0x93a1a1,
     fail_color: u24 = 0xdc322f,
     image_path: ?[]const u8 = null,
     image_mode: bgimg.Mode = .fill,
@@ -65,6 +65,7 @@ playback: bgimg.Playback = .{},
 fade: ?Fade = null,
 spinner: spin.Spinner = .{},
 spinner_buffers: [spin.frames.len]?*wl.Buffer = @splat(null),
+spinner_count: u32 = 0,
 
 pollfds: [2]posix.pollfd,
 
@@ -144,10 +145,6 @@ pub fn run(gpa: mem.Allocator, io: std.Io, username: []const u8, options: Option
     if (lock.shm == null) fatalNotAdvertised(wl.Shm);
     if (lock.subcompositor == null) fatalNotAdvertised(wl.Subcompositor);
     if (lock.session_lock_manager == null) fatalNotAdvertised(ext.SessionLockManagerV1);
-
-    lock.createSpinnerBuffers() catch |err| {
-        log.err("failed to create the spinner buffers: {s} (not showing it)", .{@errorName(err)});
-    };
 
     if (lock.idle_notifier == null or
         lock.single_pixel == null or lock.viewporter == null)
@@ -389,12 +386,14 @@ pub fn submitPassword(lock: *Lock) void {
         return;
     }
 
+    const stars = spin.starCount(lock.secret.slice());
     lock.in_flight = auth.begin(lock.username, lock.secret.slice()) catch |err| {
         log.err("failed to start authentication attempt: {s}", .{@errorName(err)});
         lock.setColor(.fail);
         lock.secret.clear();
         return;
     };
+    lock.prepareSpinner(stars);
     lock.setColor(.verifying);
     lock.secret.clear();
 }
@@ -434,7 +433,6 @@ pub fn nowMs(lock: *const Lock) i64 {
 
 fn pollTimeoutMs(lock: *Lock) i32 {
     const now = lock.nowMs();
-    // a pending unlock is due at a cycle end, which is a spinner frame boundary.
     const timeouts = [_]?i32{
         lock.animationTimeoutMs(now),
         if (lock.fade) |f| f.timeoutMs(now) else null,
@@ -482,13 +480,29 @@ fn tickSpinner(lock: *Lock) void {
     while (it.next()) |output| output.setSpinner(lock, frame);
 }
 
-/// renders every frame once up front, a tick only attaches one of these.
-fn createSpinnerBuffers(lock: *Lock) !void {
-    const size = spin.frame_pixels * 4 * spin.frames.len;
+fn prepareSpinner(lock: *Lock, count: u32) void {
+    if (lock.spinner_count == count) return;
+
+    for (&lock.spinner_buffers) |*b| {
+        if (b.*) |buffer| buffer.destroy();
+        b.* = null;
+    }
+    lock.spinner_count = 0;
+
+    lock.createSpinnerBuffers(count) catch |err| {
+        log.err("failed to create the spinner buffers: {s} (not showing it)", .{@errorName(err)});
+        return;
+    };
+    lock.spinner_count = count;
+}
+
+fn createSpinnerBuffers(lock: *Lock, count: u32) !void {
+    const strip_pixels = spin.stripWidth(count) * spin.cell;
+    const size = strip_pixels * 4 * spin.frames.len;
 
     const fd = try posix.memfd_create("levee-spinner", posix.MFD.CLOEXEC);
     defer _ = system.close(fd);
-    switch (posix.errno(system.ftruncate(fd, size))) {
+    switch (posix.errno(system.ftruncate(fd, @intCast(size)))) {
         .SUCCESS => {},
         else => |e| return posix.unexpectedErrno(e),
     }
@@ -496,16 +510,19 @@ fn createSpinnerBuffers(lock: *Lock) !void {
     const bytes = try posix.mmap(null, size, .{ .READ = true, .WRITE = true }, .{ .TYPE = .SHARED }, fd, 0);
     defer posix.munmap(bytes);
     const pixels = mem.bytesAsSlice(u32, bytes);
-    for (spin.frames, 0..) |mask, i| {
-        const frame = pixels[i * spin.frame_pixels ..][0..spin.frame_pixels];
-        spin.renderFrame(frame, mask, lock.options.verifying_color);
+    const tiles = try lock.gpa.create([spin.frames.len][spin.tile_pixels]u32);
+    defer lock.gpa.destroy(tiles);
+    spin.renderTiles(tiles, lock.options.verifying_color);
+    for (0..spin.frames.len) |k| {
+        spin.renderStrip(pixels[k * strip_pixels ..][0..strip_pixels], count, @intCast(k), tiles);
     }
 
-    const pool = try lock.shm.?.createPool(fd, size);
+    const pool = try lock.shm.?.createPool(fd, @intCast(size));
     defer pool.destroy();
     for (&lock.spinner_buffers, 0..) |*b, i| {
-        const offset = i * spin.frame_pixels * 4;
-        b.* = try pool.createBuffer(@intCast(offset), spin.width, spin.height, spin.stride, .argb8888);
+        const offset = i * strip_pixels * 4;
+        const width: i32 = @intCast(spin.stripWidth(count));
+        b.* = try pool.createBuffer(@intCast(offset), width, spin.cell, width * 4, .argb8888);
     }
 }
 
