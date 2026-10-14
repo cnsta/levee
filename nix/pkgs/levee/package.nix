@@ -13,7 +13,13 @@
 }:
 stdenv.mkDerivation (finalAttrs: {
   pname = "levee";
-  version = "unstable";
+  version = lib.pipe ../../../build.zig.zon [
+    builtins.readFile
+    (builtins.split ''\.version = "([^"]+)"'')
+    (builtins.filter builtins.isList)
+    builtins.head
+    builtins.head
+  ];
 
   src = lib.fileset.toSource {
     root = ../../..;
