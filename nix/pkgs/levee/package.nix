@@ -20,6 +20,7 @@ stdenv.mkDerivation (finalAttrs: {
     fileset = lib.fileset.unions [
       ../../../build.zig
       ../../../build.zig.zon
+      ../../../example-config.zon
       ../../../src
       ../../../protocol
       ../../../pam.d
