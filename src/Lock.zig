@@ -24,22 +24,23 @@ const list = @import("util/list.zig");
 const bgimg = @import("background.zig");
 const Fade = @import("fade.zig").Fade;
 const spin = @import("spinner.zig");
+const rej = @import("reject.zig");
 
 pub const Color = enum { init, input, input_alt, verifying, fail };
 
 pub const Options = struct {
     ready_fd: ?posix.fd_t = null,
     fork_on_lock: bool = false,
-    ignore_empty_password: bool = false,
-    init_color: u24 = 0x002b36,
-    input_color: u24 = 0x93a1a1,
-    input_alt_color: u24 = 0x93a1a1,
-    verifying_color: u24 = 0x93a1a1,
-    fail_color: u24 = 0xdc322f,
-    image_path: ?[]const u8 = null,
-    image_mode: bgimg.Mode = .fill,
-    fade_end_s: u32 = 20,
-    fade_duration_s: u32 = 20,
+    ignore_empty_password: bool,
+    init_color: u24,
+    input_color: u24,
+    input_alt_color: u24,
+    verifying_color: u24,
+    fail_color: u24,
+    image_path: ?[]const u8,
+    image_mode: bgimg.Mode,
+    fade_end_s: u32,
+    fade_duration_s: u32,
 };
 
 gpa: mem.Allocator,
@@ -56,7 +57,6 @@ state: enum {
 
 color: Color = .init,
 caps_lock: bool = false,
-attempt_count: u32 = 0,
 secret: Secret,
 in_flight: ?auth.Attempt = null,
 io: std.Io,
@@ -66,6 +66,8 @@ fade: ?Fade = null,
 spinner: spin.Spinner = .{},
 spinner_buffers: [spin.frames.len]?*wl.Buffer = @splat(null),
 spinner_count: u32 = 0,
+reject: rej.Reject = .{},
+reject_buffers: [rej.frame_count]?*wl.Buffer = @splat(null),
 
 pollfds: [2]posix.pollfd,
 
@@ -91,14 +93,6 @@ pub fn run(gpa: mem.Allocator, io: std.Io, username: []const u8, options: Option
             log.warn(
                 "failed to load background image '{s}': {s} (using the solid background color instead)",
                 .{ path, @errorName(err) },
-            );
-            break :blk null;
-        };
-    } else {
-        background_image = bgimg.loadDefault(gpa) catch |err| blk: {
-            log.warn(
-                "failed to load the built-in default background image: {s} (using the solid background color instead)",
-                .{@errorName(err)},
             );
             break :blk null;
         };
@@ -198,7 +192,7 @@ pub fn run(gpa: mem.Allocator, io: std.Io, username: []const u8, options: Option
             if (auth.finish(attempt)) {
                 lock.state = .unlocking;
             } else {
-                lock.setColor(.fail);
+                lock.rejectPassword();
             }
         }
 
@@ -212,6 +206,7 @@ pub fn run(gpa: mem.Allocator, io: std.Io, username: []const u8, options: Option
         lock.tickAnimation();
         lock.tickFade();
         lock.tickSpinner();
+        lock.tickReject();
     }
 
     const errno = lock.display.roundtrip();
@@ -258,6 +253,7 @@ fn deinit(lock: *Lock) void {
     if (lock.single_pixel) |s| s.destroy();
     if (lock.viewporter) |v| v.destroy();
     for (lock.spinner_buffers) |b| if (b) |buffer| buffer.destroy();
+    lock.freeRejectBuffers();
 
     assert(lock.session_lock_manager == null);
     assert(lock.session_lock == null);
@@ -389,7 +385,8 @@ pub fn submitPassword(lock: *Lock) void {
     const stars = spin.starCount(lock.secret.slice());
     lock.in_flight = auth.begin(lock.username, lock.secret.slice()) catch |err| {
         log.err("failed to start authentication attempt: {s}", .{@errorName(err)});
-        lock.setColor(.fail);
+        lock.prepareSpinner(stars);
+        lock.rejectPassword();
         lock.secret.clear();
         return;
     };
@@ -412,8 +409,53 @@ pub fn setColor(lock: *Lock, color: Color) void {
     if (lock.color == color) return;
     lock.color = color;
     if (color == .verifying) lock.spinner.start(lock.nowMs()) else lock.spinner.stop();
-    if (color == .fail) lock.attempt_count += 1;
+    if (color == .fail and lock.reject_buffers[0] != null) lock.reject.start(lock.nowMs()) else lock.reject.stop();
     lock.redrawAll();
+    if (color != .fail) lock.freeRejectBuffers();
+}
+
+fn rejectPassword(lock: *Lock) void {
+    log.info("authentication failed", .{});
+    const start = lock.spinner.frame(lock.nowMs()) orelse 0;
+    lock.freeRejectBuffers();
+    if (lock.spinner_count > 0) {
+        lock.createRejectBuffers(lock.spinner_count, start) catch |err| {
+            log.err("failed to create the reject animation: {s} (not showing it)", .{@errorName(err)});
+            lock.freeRejectBuffers();
+        };
+    }
+    lock.setColor(.fail);
+}
+
+fn tickReject(lock: *Lock) void {
+    const now = lock.nowMs();
+    if (lock.reject.done(now)) {
+        lock.setColor(.init);
+        return;
+    }
+    const frame = lock.reject.frame(now) orelse return;
+    var it = list.safeIterator(Output, .link, &lock.outputs);
+    while (it.next()) |output| output.setMark(lock, .{ .reject = frame });
+}
+
+fn freeRejectBuffers(lock: *Lock) void {
+    for (&lock.reject_buffers) |*b| {
+        if (b.*) |buffer| buffer.destroy();
+        b.* = null;
+    }
+}
+
+pub fn mark(lock: *const Lock, now: i64) ?Output.Mark {
+    if (lock.spinner.frame(now)) |f| return .{ .spin = f };
+    if (lock.reject.frame(now)) |k| return .{ .reject = k };
+    return null;
+}
+
+pub fn markBuffer(lock: *const Lock, m: Output.Mark) ?*wl.Buffer {
+    return switch (m) {
+        .spin => |f| lock.spinner_buffers[f],
+        .reject => |k| lock.reject_buffers[k],
+    };
 }
 
 pub fn setCapsLock(lock: *Lock, active: bool) void {
@@ -437,6 +479,7 @@ fn pollTimeoutMs(lock: *Lock) i32 {
         lock.animationTimeoutMs(now),
         if (lock.fade) |f| f.timeoutMs(now) else null,
         lock.spinner.timeoutMs(now),
+        lock.reject.timeoutMs(now),
     };
     var min: ?i32 = null;
     for (timeouts) |t| {
@@ -477,7 +520,7 @@ fn tickAnimation(lock: *Lock) void {
 fn tickSpinner(lock: *Lock) void {
     const frame = lock.spinner.frame(lock.nowMs()) orelse return;
     var it = list.safeIterator(Output, .link, &lock.outputs);
-    while (it.next()) |output| output.setSpinner(lock, frame);
+    while (it.next()) |output| output.setMark(lock, .{ .spin = frame });
 }
 
 fn prepareSpinner(lock: *Lock, count: u32) void {
@@ -497,10 +540,42 @@ fn prepareSpinner(lock: *Lock, count: u32) void {
 }
 
 fn createSpinnerBuffers(lock: *Lock, count: u32) !void {
-    const strip_pixels = spin.stripWidth(count) * spin.cell;
-    const size = strip_pixels * 4 * spin.frames.len;
+    const tiles = try lock.gpa.create([spin.frames.len][spin.tile_pixels]u32);
+    defer lock.gpa.destroy(tiles);
+    spin.renderTiles(tiles, lock.options.verifying_color);
+    try lock.createStrips(&lock.spinner_buffers, count, struct {
+        tiles: *const [spin.frames.len][spin.tile_pixels]u32,
+        fn render(r: @This(), strip: []u32, n: u32, k: usize) void {
+            spin.renderStrip(strip, n, @intCast(k), r.tiles);
+        }
+    }{ .tiles = tiles });
+}
 
-    const fd = try posix.memfd_create("levee-spinner", posix.MFD.CLOEXEC);
+fn createRejectBuffers(lock: *Lock, count: u32, start: spin.Frame) !void {
+    const coverage = try lock.gpa.create(rej.Coverage);
+    defer lock.gpa.destroy(coverage);
+    rej.renderCoverage(coverage);
+    try lock.createStrips(&lock.reject_buffers, count, struct {
+        coverage: *const rej.Coverage,
+        start: spin.Frame,
+        verifying: u24,
+        fail: u24,
+        fn render(r: @This(), strip: []u32, n: u32, k: usize) void {
+            rej.renderStrip(strip, n, k, r.start, r.verifying, r.fail, r.coverage);
+        }
+    }{
+        .coverage = coverage,
+        .start = start,
+        .verifying = lock.options.verifying_color,
+        .fail = lock.options.fail_color,
+    });
+}
+
+fn createStrips(lock: *Lock, buffers: []?*wl.Buffer, count: u32, renderer: anytype) !void {
+    const strip_pixels = spin.stripWidth(count) * spin.cell;
+    const size = strip_pixels * 4 * buffers.len;
+
+    const fd = try posix.memfd_create("levee-strips", posix.MFD.CLOEXEC);
     defer _ = system.close(fd);
     switch (posix.errno(system.ftruncate(fd, @intCast(size)))) {
         .SUCCESS => {},
@@ -510,16 +585,11 @@ fn createSpinnerBuffers(lock: *Lock, count: u32) !void {
     const bytes = try posix.mmap(null, size, .{ .READ = true, .WRITE = true }, .{ .TYPE = .SHARED }, fd, 0);
     defer posix.munmap(bytes);
     const pixels = mem.bytesAsSlice(u32, bytes);
-    const tiles = try lock.gpa.create([spin.frames.len][spin.tile_pixels]u32);
-    defer lock.gpa.destroy(tiles);
-    spin.renderTiles(tiles, lock.options.verifying_color);
-    for (0..spin.frames.len) |k| {
-        spin.renderStrip(pixels[k * strip_pixels ..][0..strip_pixels], count, @intCast(k), tiles);
-    }
+    for (0..buffers.len) |k| renderer.render(pixels[k * strip_pixels ..][0..strip_pixels], count, k);
 
     const pool = try lock.shm.?.createPool(fd, @intCast(size));
     defer pool.destroy();
-    for (&lock.spinner_buffers, 0..) |*b, i| {
+    for (buffers, 0..) |*b, i| {
         const offset = i * strip_pixels * 4;
         const width: i32 = @intCast(spin.stripWidth(count));
         b.* = try pool.createBuffer(@intCast(offset), width, spin.cell, width * 4, .argb8888);
