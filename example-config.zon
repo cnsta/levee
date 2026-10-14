@@ -29,9 +29,15 @@
     // snaps back and restarts the count.
     .fade = .{
         // Idle seconds at which the screen is fully black.
-        .end = 180,
-        // Seconds the fade lasts, ending at `end` (capped at it), 0 disables.
+        .end = 20,
+        // Seconds the fade lasts, ending at `end` (capped at it), 0 skips the
+        // fade (black at once at `end`).
         .duration = 20,
+        // Run at black and on the next input (or exit). No shell: a program
+        // and its arguments. The NixOS module passes wlopm here as flags,
+        // which override these.
+        .on_black = .{ "wlopm", "--off", "*" },
+        .on_wake = .{ "wlopm", "--on", "*" },
     },
     // Ignore Enter with nothing typed.
     .ignore_empty_password = false,
