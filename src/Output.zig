@@ -25,7 +25,7 @@ lock_surface: ?*ext.SessionLockSurfaceV1 = null,
 
 spinner_surface: ?*wl.Surface = null,
 spinner_subsurface: ?*wl.Subsurface = null,
-spinner_frame: ?spinner.Frame = null,
+mark: ?Mark = null,
 
 fade_surface: ?*wl.Surface = null,
 fade_subsurface: ?*wl.Subsurface = null,
@@ -75,19 +75,24 @@ fn createSpinnerSurface(output: *Output, parent: *wl.Surface) !void {
     subsurface.setDesync();
 }
 
-pub fn setSpinner(output: *Output, lock: *const Lock, frame: ?spinner.Frame) void {
+pub const Mark = union(enum) {
+    spin: spinner.Frame,
+    reject: u8,
+};
+
+pub fn setMark(output: *Output, lock: *const Lock, mark: ?Mark) void {
     if (!output.configured) return;
     const surface = output.spinner_surface orelse return;
-    if (std.meta.eql(frame, output.spinner_frame)) return;
+    if (std.meta.eql(mark, output.mark)) return;
 
     var buffer: ?*wl.Buffer = null;
-    if (frame) |i| {
-        buffer = lock.spinner_buffers[i] orelse return;
+    if (mark) |m| {
+        buffer = lock.markBuffer(m) orelse return;
         surface.damageBuffer(0, 0, @intCast(spinner.stripWidth(lock.spinner_count)), spinner.cell);
     }
     surface.attach(buffer, 0, 0);
     surface.commit();
-    output.spinner_frame = frame;
+    output.mark = mark;
 }
 
 fn createFadeSurface(output: *Output, parent: *wl.Surface) !void {
@@ -162,7 +167,7 @@ pub fn render(output: *Output, lock: *const Lock) void {
             @intFromFloat(@floor(row_y + ink)),
         );
     }
-    output.setSpinner(lock, lock.spinner.frame(lock.nowMs()));
+    output.setMark(lock, lock.mark(lock.nowMs()));
 
     const sb = output.shm orelse return;
 
@@ -195,15 +200,6 @@ pub fn render(output: *Output, lock: *const Lock) void {
 
     if (lock.caps_lock) {
         drawCentered(canvas, cx, row_y - status_gap - glyph_h, "CAPS LOCK", label_color);
-    }
-
-    switch (lock.color) {
-        .fail => {
-            var buf: [32]u8 = undefined;
-            const label = std.fmt.bufPrint(&buf, "WRONG PASSWORD ({d})", .{lock.attempt_count}) catch "WRONG PASSWORD";
-            drawCentered(canvas, cx, row_y, label, label_color);
-        },
-        else => {},
     }
 
     buffer.busy = true;
