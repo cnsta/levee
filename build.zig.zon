@@ -1,6 +1,6 @@
 .{
     .name = .levee,
-    .version = "0.1.5",
+    .version = "0.1.6",
     .fingerprint = 0xe33674b71e7e219f,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
@@ -20,6 +20,7 @@
     .paths = .{
         "build.zig",
         "build.zig.zon",
+        "example-config.zon",
         "src",
         "protocol",
         "pam.d",
