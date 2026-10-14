@@ -9,6 +9,7 @@ const log = std.log;
 const Lock = @import("Lock.zig");
 const flags = @import("flags.zig");
 const Config = @import("Config.zig");
+const command = @import("command.zig");
 
 test {
     _ = @import("Secret.zig");
@@ -21,6 +22,7 @@ test {
     _ = @import("spinner.zig");
     _ = @import("reject.zig");
     _ = @import("Config.zig");
+    _ = @import("command.zig");
 }
 
 const usage =
@@ -51,9 +53,13 @@ const usage =
     \\                             fit, stretch, center, or tile.
     \\
     \\  -fade-end <seconds>        Idle seconds after locking at which the screen is fully
-    \\                             black (default 20). Match the idle blank timeout.
+    \\                             black (default 20), when -on-black runs.
     \\  -fade-duration <seconds>   Fade to black over this long, ending at -fade-end
-    \\                             (default 20, capped at -fade-end; 0 disables).
+    \\                             (default 20, capped at -fade-end; 0 skips the fade).
+    \\  -on-black <command>        Run this once the screen is black, e.g.
+    \\                             "wlopm --off *". Split on spaces, no shell.
+    \\  -on-wake <command>         Run this on the next input or exit, e.g.
+    \\                             "wlopm --on *". An empty string clears either.
     \\
 ;
 
@@ -79,6 +85,8 @@ pub fn main(init: process.Init) !void {
         .{ .name = "mode", .kind = .arg },
         .{ .name = "fade-end", .kind = .arg },
         .{ .name = "fade-duration", .kind = .arg },
+        .{ .name = "on-black", .kind = .arg },
+        .{ .name = "on-wake", .kind = .arg },
     }).parse(args[1..]) catch {
         std.debug.print("{s}", .{usage});
         process.exit(1);
@@ -109,7 +117,7 @@ pub fn main(init: process.Init) !void {
         }
     }
 
-    // a bad config is logged and ignored: failing to lock is worse.
+    // A bad config is logged and ignored: failing to lock is worse.
     var loaded: ?Config.Loaded = null;
     defer if (loaded) |*l| l.deinit();
     const default_path = try Config.defaultPath(gpa, init.environ_map);
@@ -137,6 +145,8 @@ pub fn main(init: process.Init) !void {
         .image_mode = config.background.mode,
         .fade_end_s = config.fade.end,
         .fade_duration_s = config.fade.duration,
+        .on_black = config.fade.on_black,
+        .on_wake = config.fade.on_wake,
     };
     if (result.flags.@"ready-fd") |raw| {
         options.ready_fd = std.fmt.parseInt(posix.fd_t, raw, 10) catch {
@@ -172,6 +182,11 @@ pub fn main(init: process.Init) !void {
 
     if (result.flags.@"fade-end") |raw| options.fade_end_s = parseSeconds(raw);
     if (result.flags.@"fade-duration") |raw| options.fade_duration_s = parseSeconds(raw);
+
+    var flag_arena = std.heap.ArenaAllocator.init(gpa);
+    defer flag_arena.deinit();
+    if (result.flags.@"on-black") |raw| options.on_black = try command.split(flag_arena.allocator(), raw);
+    if (result.flags.@"on-wake") |raw| options.on_wake = try command.split(flag_arena.allocator(), raw);
 
     const passwd: *pam.struct_passwd = pam.getpwuid(pam.getuid()) orelse {
         log.err("failed to look up the current user", .{});
