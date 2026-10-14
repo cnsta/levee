@@ -218,14 +218,14 @@ fn i420ToRgba(planes: [3][*c]const u8, strides: [3]usize, dst: DecodedImage, m: 
 
 const testing = std.testing;
 
-const sample_video = @embedFile("assets/wallpaper.mp4");
+const sample_video = @embedFile("assets/test.mp4");
 
-test "decodes the bundled wallpaper: real pixels, frames change, loops back to 0" {
+test "decodes the test clip: real pixels, frames change, loops back to 0" {
     const video = try create(testing.allocator, sample_video, false);
     defer video.destroy();
 
-    try testing.expectEqual(@as(u32, 1920), video.frame.width);
-    try testing.expectEqual(@as(u32, 1080), video.frame.height);
+    try testing.expectEqual(@as(u32, 64), video.frame.width);
+    try testing.expectEqual(@as(u32, 36), video.frame.height);
 
     const first = try testing.allocator.dupe(u8, video.frame.pixels);
     defer testing.allocator.free(first);

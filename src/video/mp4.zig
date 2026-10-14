@@ -225,16 +225,16 @@ fn readInt(comptime T: type, data: []const u8, at: usize) T {
 
 const testing = std.testing;
 
-const sample_video = @embedFile("../assets/wallpaper.mp4");
+const sample_video = @embedFile("../assets/test.mp4");
 
-test "parse: the bundled wallpaper is a 720-frame 1080p VP9 track of about 24 s" {
+test "parse: the test clip is a 15-frame 64x36 VP9 track of about 0.5 s" {
     var track = try parse(testing.allocator, sample_video);
     defer track.deinit(testing.allocator);
 
     try testing.expectEqual(Codec.vp9, track.codec);
-    try testing.expectEqual(@as(u16, 1920), track.width);
-    try testing.expectEqual(@as(u16, 1080), track.height);
-    try testing.expectEqual(@as(usize, 720), track.samples.len);
+    try testing.expectEqual(@as(u16, 64), track.width);
+    try testing.expectEqual(@as(u16, 36), track.height);
+    try testing.expectEqual(@as(usize, 15), track.samples.len);
 
     var total: u64 = 0;
     for (track.samples) |s| {
@@ -242,7 +242,7 @@ test "parse: the bundled wallpaper is a 720-frame 1080p VP9 track of about 24 s"
         try testing.expect(s.delay_ms >= 33 and s.delay_ms <= 34);
         total += s.delay_ms;
     }
-    try testing.expect(total >= 23_500 and total <= 24_500);
+    try testing.expect(total >= 490 and total <= 510);
     try testing.expect(track.samples[1].offset >= track.samples[0].offset + track.samples[0].size);
 }
 
@@ -254,7 +254,7 @@ test "sniff: only ftyp-led files count" {
 
 test "parse: every truncation of the file is an error, not a crash" {
     var len: usize = 0;
-    while (len < sample_video.len) : (len += sample_video.len / 97 + 1) {
+    while (len < sample_video.len) : (len += 1) {
         if (parse(testing.allocator, sample_video[0..len])) |t| {
             var track = t;
             track.deinit(testing.allocator);

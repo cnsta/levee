@@ -134,19 +134,10 @@ pub const max_file_bytes: usize = 512 * 1024 * 1024;
 
 pub fn load(gpa: mem.Allocator, io: std.Io, path: []const u8) !Background {
     const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(max_file_bytes));
-    if (mp4.sniff(bytes)) return fromVideo(gpa, bytes, true);
+    // the video owns the bytes (it decodes samples from them on demand).
+    if (mp4.sniff(bytes)) return .{ .source = .{ .video = try Video.create(gpa, bytes, true) }, .loop_count = -1 };
     defer gpa.free(bytes);
     return loadImage(gpa, bytes);
-}
-
-const default_wallpaper_bytes = @embedFile("assets/wallpaper.mp4");
-
-pub fn loadDefault(gpa: mem.Allocator) !Background {
-    return fromVideo(gpa, default_wallpaper_bytes, false);
-}
-
-fn fromVideo(gpa: mem.Allocator, bytes: []const u8, owned: bool) !Background {
-    return .{ .source = .{ .video = try Video.create(gpa, bytes, owned) }, .loop_count = -1 };
 }
 
 fn loadImage(gpa: mem.Allocator, bytes: []const u8) !Background {
@@ -368,8 +359,8 @@ fn putPixel(canvas: gfx.Canvas, x: i32, y: i32, image: DecodedImage, sx: u32, sy
 
 const testing = std.testing;
 
-test "the bundled GIF decodes into sane RGBA8 frames" {
-    var bg = try loadImage(testing.allocator, @embedFile("assets/wallpaper.gif"));
+test "the test GIF decodes into sane RGBA8 frames" {
+    var bg = try loadImage(testing.allocator, @embedFile("assets/test.gif"));
     defer bg.deinit(testing.allocator);
 
     try testing.expect(bg.isAnimated());
@@ -388,21 +379,6 @@ test "the bundled GIF decodes into sane RGBA8 frames" {
     }
 
     try testing.expect(!mem.eql(u8, f.images[0].pixels, f.images[1].pixels));
-}
-
-test "loadDefault plays the bundled video forever, one frame at a time" {
-    var bg = try loadDefault(testing.allocator);
-    defer bg.deinit(testing.allocator);
-
-    try testing.expectEqual(@as(usize, 720), bg.frameCount());
-    try testing.expectEqual(@as(i32, -1), bg.loop_count);
-    try testing.expectEqual(@as(u32, 1920), bg.current(0).width);
-
-    var p = Playback.init(bg, 0);
-    try testing.expectEqual(@as(?i32, 33), p.timeoutMs(0));
-    try testing.expect(p.advance(bg, 40));
-    try bg.show(p.index);
-    try testing.expectEqual(@as(usize, 1), p.index);
 }
 
 test "clampDelay treats zero and tiny GIF delays as 100ms" {
