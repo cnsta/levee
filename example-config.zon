@@ -23,10 +23,14 @@
         // A wrong password: the stars turn into this colour's `!`.
         .fail = 0xdc322f,
     },
+    // The fade lasts `duration` seconds and finishes `end` idle seconds after
+    // locking, so it starts at `end` minus `duration`: `.end = 180` with
+    // `.duration = 20` starts fading at 160 s and is black at 180 s. Any input
+    // snaps back and restarts the count.
     .fade = .{
-        // Idle seconds after locking at which the screen is fully black.
-        .end = 20,
-        // Fade to black over this long, ending at `end`, 0 disables.
+        // Idle seconds at which the screen is fully black.
+        .end = 180,
+        // Seconds the fade lasts, ending at `end` (capped at it), 0 disables.
         .duration = 20,
     },
     // Ignore Enter with nothing typed.
