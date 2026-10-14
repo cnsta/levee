@@ -8,6 +8,7 @@ const log = std.log;
 
 const Lock = @import("Lock.zig");
 const flags = @import("flags.zig");
+const Config = @import("Config.zig");
 
 test {
     _ = @import("Secret.zig");
@@ -18,6 +19,8 @@ test {
     _ = @import("video/mp4.zig");
     _ = @import("fade.zig");
     _ = @import("spinner.zig");
+    _ = @import("reject.zig");
+    _ = @import("Config.zig");
 }
 
 const usage =
@@ -25,6 +28,9 @@ const usage =
     \\
     \\  -h                         Print this help message and exit.
     \\  -log-level <level>         Set the log level to error, warning, info, or debug.
+    \\  -config <path>             Read this config instead of
+    \\                             $XDG_CONFIG_HOME/levee/config.zon. The flags below
+    \\                             override it.
     \\
     \\  -ready-fd <fd>             Write a newline to fd once the session is locked
     \\                             (for a swayidle-driven wrapper to synchronize on).
@@ -40,7 +46,7 @@ const usage =
     \\
     \\  -image <path>              Set a background image (png, bmp, tga, qoi, jpeg, gif)
     \\                             or a VP8/VP9 video in .mp4. Animated gifs and videos
-    \\                             play. Defaults to a bundled looping video.
+    \\                             play. Without one, the background is solid.
     \\  -mode <mode>               Set how the background image is scaled: fill (default),
     \\                             fit, stretch, center, or tile.
     \\
@@ -60,6 +66,7 @@ pub fn main(init: process.Init) !void {
     const result = flags.parser(&.{
         .{ .name = "h", .kind = .boolean },
         .{ .name = "log-level", .kind = .arg },
+        .{ .name = "config", .kind = .arg },
         .{ .name = "ready-fd", .kind = .arg },
         .{ .name = "fork-on-lock", .kind = .boolean },
         .{ .name = "ignore-empty-password", .kind = .boolean },
@@ -102,9 +109,34 @@ pub fn main(init: process.Init) !void {
         }
     }
 
+    // a bad config is logged and ignored: failing to lock is worse.
+    var loaded: ?Config.Loaded = null;
+    defer if (loaded) |*l| l.deinit();
+    const default_path = try Config.defaultPath(gpa, init.environ_map);
+    defer if (default_path) |p| gpa.free(p);
+    if (result.flags.config orelse default_path) |path| {
+        var report: ?[]const u8 = null;
+        defer if (report) |r| gpa.free(r);
+        loaded = try Config.load(gpa, init.io, path, init.environ_map.get("HOME"), &report);
+        if (report) |r| log.err("ignoring config {s}: {s}", .{ path, r });
+        if (loaded == null and report == null and result.flags.config != null) {
+            log.err("config {s} not found, using the defaults", .{path});
+        }
+    }
+    const config: Config = if (loaded) |l| l.config else .{};
+
     var options: Lock.Options = .{
-        .ignore_empty_password = result.flags.@"ignore-empty-password",
+        .ignore_empty_password = config.ignore_empty_password or result.flags.@"ignore-empty-password",
         .fork_on_lock = result.flags.@"fork-on-lock",
+        .init_color = config.background.color,
+        .input_color = config.colors.input,
+        .input_alt_color = config.colors.input_alt,
+        .verifying_color = config.colors.verifying,
+        .fail_color = config.colors.fail,
+        .image_path = config.background.path,
+        .image_mode = config.background.mode,
+        .fade_end_s = config.fade.end,
+        .fade_duration_s = config.fade.duration,
     };
     if (result.flags.@"ready-fd") |raw| {
         options.ready_fd = std.fmt.parseInt(posix.fd_t, raw, 10) catch {
