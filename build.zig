@@ -58,6 +58,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    exe.root_module.addAnonymousImport("example_config", .{ .root_source_file = b.path("example-config.zon") });
+
     exe.use_llvm = true;
     exe.use_lld = true;
 
