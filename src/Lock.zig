@@ -23,6 +23,7 @@ const Seat = @import("Seat.zig");
 const list = @import("util/list.zig");
 const bgimg = @import("background.zig");
 const Fade = @import("fade.zig").Fade;
+const command = @import("command.zig");
 const spin = @import("spinner.zig");
 const rej = @import("reject.zig");
 
@@ -41,6 +42,8 @@ pub const Options = struct {
     image_mode: bgimg.Mode,
     fade_end_s: u32,
     fade_duration_s: u32,
+    on_black: []const []const u8,
+    on_wake: []const []const u8,
 };
 
 gpa: mem.Allocator,
@@ -63,6 +66,7 @@ io: std.Io,
 background: ?bgimg.Background = null,
 playback: bgimg.Playback = .{},
 fade: ?Fade = null,
+blanked: bool = false,
 spinner: spin.Spinner = .{},
 spinner_buffers: [spin.frames.len]?*wl.Buffer = @splat(null),
 spinner_count: u32 = 0,
@@ -145,7 +149,7 @@ pub fn run(gpa: mem.Allocator, io: std.Io, username: []const u8, options: Option
     {
         log.info("compositor lacks a protocol the fade to black needs, not fading", .{});
     } else {
-        lock.fade = .init(options.fade_duration_s, options.fade_end_s);
+        lock.fade = .init(options.fade_duration_s, options.fade_end_s, options.on_black.len > 0);
     }
 
     lock.session_lock = lock.session_lock_manager.?.lock() catch fatalOom();
@@ -199,6 +203,7 @@ pub fn run(gpa: mem.Allocator, io: std.Io, username: []const u8, options: Option
         if (lock.state == .unlocking and lock.nowMs() >= (lock.spinner.cycleEndMs() orelse 0)) {
             lock.session_lock.?.unlockAndDestroy();
             lock.session_lock = null;
+            lock.wake();
             lock.state = .exiting;
             break;
         }
@@ -365,6 +370,7 @@ fn sessionLockListener(_: *ext.SessionLockV1, event: ext.SessionLockV1.Event, lo
                 },
                 .locked, .unlocking => {
                     log.info("the compositor unlocked the session, exiting", .{});
+                    lock.wake();
                     process.exit(0);
                 },
                 .exiting => {},
@@ -617,6 +623,7 @@ pub fn updateIdle(lock: *Lock) void {
         if (fade.start_ms == null) fade.start_ms = lock.nowMs();
     } else if (fade.start_ms != null) {
         fade.start_ms = null;
+        lock.wake();
         lock.tickFade();
     }
 }
@@ -627,6 +634,17 @@ fn tickFade(lock: *Lock) void {
 
     var it = list.safeIterator(Output, .link, &lock.outputs);
     while (it.next()) |output| output.setFade(lock, alpha);
+
+    if (alpha >= 1 and !lock.blanked and lock.options.on_black.len > 0) {
+        lock.blanked = true;
+        command.run(lock.gpa, lock.options.on_black);
+    }
+}
+
+fn wake(lock: *Lock) void {
+    if (!lock.blanked) return;
+    lock.blanked = false;
+    command.run(lock.gpa, lock.options.on_wake);
 }
 
 fn fatalOom() noreturn {
