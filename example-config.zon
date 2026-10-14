@@ -1,0 +1,34 @@
+// levee reads $XDG_CONFIG_HOME/levee/config.zon (default ~/.config/levee/)
+// when it locks, `levee -config <path>` picks another file. Every field is
+// optional, and command-line flags override it. A broken file is logged and
+// ignored: levee still locks with its defaults.
+.{
+    .background = .{
+        // An image (png, bmp, tga, qoi, jpeg, gif, gifs animate) or a VP8/VP9
+        // .mp4 video, which loops. Picked by content, not the extension. `~/`
+        // is your home, a relative path is relative to this file. Leave it out
+        // for a solid `color`.
+        .path = "~/Pictures/wallpaper.mp4",
+        // fill, fit, stretch, center or tile.
+        .mode = .fill,
+        // Shown behind the image, and on its own without one.
+        .color = 0x002b36,
+    },
+    .colors = .{
+        // The typed asterisks alternate between these on each key.
+        .input = 0x93a1a1,
+        .input_alt = 0x93a1a1,
+        // The stars while the password is checked.
+        .verifying = 0x93a1a1,
+        // A wrong password: the stars turn into this colour's `!`.
+        .fail = 0xdc322f,
+    },
+    .fade = .{
+        // Idle seconds after locking at which the screen is fully black.
+        .end = 20,
+        // Fade to black over this long, ending at `end`, 0 disables.
+        .duration = 20,
+    },
+    // Ignore Enter with nothing typed.
+    .ignore_empty_password = false,
+}
