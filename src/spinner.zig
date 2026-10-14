@@ -6,7 +6,7 @@ pub const Shape = struct {
     inner: f32,
 };
 
-const six: Shape = .{ .points = 6, .inner = 0.5 }; // ✶
+pub const six: Shape = .{ .points = 6, .inner = 0.5 }; // ✶
 const eight_heavy: Shape = .{ .points = 8, .inner = 0.5 }; // ✸
 const twelve: Shape = .{ .points = 12, .inner = 0.6 }; // ✹
 const sixteen: Shape = .{ .points = 16, .inner = 0.4 }; // ✺
@@ -23,7 +23,7 @@ pub const cycle_ms = interval_ms * frames.len;
 /// one star per typed character, a square cell as wide as the password row's
 /// glyph advance.
 pub const cell = 24;
-const radius = 9.0;
+pub const radius = 9.0;
 pub const max_stars = 64;
 pub const tile_pixels = cell * cell;
 
@@ -69,6 +69,20 @@ pub const Spinner = struct {
 };
 
 pub fn renderStar(tile: *[tile_pixels]u32, shape: Shape, color: u24) void {
+    var cov: [tile_pixels]u8 = undefined;
+    coverage(&cov, shape, struct {
+        fn inside(s: Shape, x: f32, y: f32) bool {
+            return insideStar(s, radius, x, y);
+        }
+    }.inside);
+    for (tile, cov) |*px, a| px.* = premultiply(color, a);
+}
+
+pub fn coverage(
+    tile: *[tile_pixels]u8,
+    ctx: anytype,
+    comptime inside: fn (@TypeOf(ctx), f32, f32) bool,
+) void {
     const samples = 4;
     const c: f32 = cell / 2.0;
     for (0..cell) |y| {
@@ -78,21 +92,21 @@ pub fn renderStar(tile: *[tile_pixels]u32, shape: Shape, color: u24) void {
                 for (0..samples) |sx| {
                     const px = @as(f32, @floatFromInt(x)) + (@as(f32, @floatFromInt(sx)) + 0.5) / samples;
                     const py = @as(f32, @floatFromInt(y)) + (@as(f32, @floatFromInt(sy)) + 0.5) / samples;
-                    if (insideStar(shape, px - c, py - c)) hits += 1;
+                    if (inside(ctx, px - c, py - c)) hits += 1;
                 }
             }
-            tile[y * cell + x] = premultiply(color, @intCast(hits * 255 / (samples * samples)));
+            tile[y * cell + x] = @intCast(hits * 255 / (samples * samples));
         }
     }
 }
 
-fn insideStar(shape: Shape, x: f32, y: f32) bool {
+pub fn insideStar(shape: Shape, r: f32, x: f32, y: f32) bool {
     const n: usize = 2 * @as(usize, shape.points);
     const step = math.pi / @as(f32, @floatFromInt(shape.points));
     var inside = false;
-    var prev = vertex(shape, n - 1, step);
+    var prev = vertex(shape, r, n - 1, step);
     for (0..n) |i| {
-        const cur = vertex(shape, i, step);
+        const cur = vertex(shape, r, i, step);
         if ((cur[1] > y) != (prev[1] > y)) {
             const cross_x = cur[0] + (y - cur[1]) * (prev[0] - cur[0]) / (prev[1] - cur[1]);
             if (x < cross_x) inside = !inside;
@@ -102,8 +116,8 @@ fn insideStar(shape: Shape, x: f32, y: f32) bool {
     return inside;
 }
 
-fn vertex(shape: Shape, i: usize, step: f32) [2]f32 {
-    const r: f32 = if (i % 2 == 0) radius else radius * shape.inner;
+fn vertex(shape: Shape, outer: f32, i: usize, step: f32) [2]f32 {
+    const r: f32 = if (i % 2 == 0) outer else outer * shape.inner;
     const a = -math.pi / 2.0 + step * @as(f32, @floatFromInt(i));
     return .{ r * @cos(a), r * @sin(a) };
 }
@@ -122,7 +136,7 @@ pub fn renderTiles(tiles: *[frames.len][tile_pixels]u32, color: u24) void {
     for (tiles, frames) |*tile, shape| renderStar(tile, shape, color);
 }
 
-fn premultiply(color: u24, a: u8) u32 {
+pub fn premultiply(color: u24, a: u8) u32 {
     var px: u32 = @as(u32, a) << 24;
     inline for (.{ 16, 8, 0 }) |shift| {
         const ch: u32 = (color >> shift) & 0xff;
@@ -137,7 +151,7 @@ test "frames are the star-1 sequence" {
     try testing.expectEqual(6, frames.len);
     try testing.expectEqual(@as(u8, 6), frames[0].points);
     try testing.expectEqual(@as(u8, 16), frames[3].points);
-    try testing.expectEqual(frames[2], frames[4]);
+    try testing.expectEqual(frames[2], frames[4]); // ✹ on the way out and back
     try testing.expectEqual(@as(u8, 8), frames[5].points);
 }
 
@@ -159,7 +173,7 @@ test "Spinner: frames advance on interval boundaries and wrap per cycle" {
     try testing.expectEqual(@as(?Frame, 1), s.frame(1_000 + interval_ms));
     try testing.expectEqual(@as(?Frame, 5), s.frame(1_000 + cycle_ms - 1));
     try testing.expectEqual(@as(?Frame, 0), s.frame(1_000 + cycle_ms));
-    try testing.expectEqual(@as(?Frame, 0), s.frame(500));
+    try testing.expectEqual(@as(?Frame, 0), s.frame(500)); // clock before start
 
     try testing.expectEqual(@as(?i32, interval_ms), s.timeoutMs(1_000));
     try testing.expectEqual(@as(?i32, 30), s.timeoutMs(1_050));
