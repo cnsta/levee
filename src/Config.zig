@@ -34,6 +34,11 @@ pub const Fade = struct {
     end: u32 = 20,
     /// fade to black over this long. (0 disables anim).
     duration: u32 = 20,
+    /// run once the screen is black (argv, no shell), e.g. to turn the
+    /// outputs off.
+    on_black: []const []const u8 = &.{},
+    /// run on the first input after `on_black` ran, or when levee exits.
+    on_wake: []const []const u8 = &.{},
 };
 
 pub const Loaded = struct {
