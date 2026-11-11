@@ -115,7 +115,7 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, seat: *Seat) void
             defer _ = system.close(ev.fd);
 
             if (ev.format != .xkb_v1) {
-                log.err("unsupported keymap format {d}", .{@intFromEnum(ev.format)});
+                log.err("unsupported keymap format {d}", .{@backingInt(ev.format)});
                 return;
             }
 
@@ -166,7 +166,7 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, seat: *Seat) void
 
                 const caps_active = xkb_state.modNameIsActive(
                     xkb.names.mod.caps,
-                    @enumFromInt(xkb.State.Component.mods_effective),
+                    @fromBackingInt(@intCast(xkb.State.Component.mods_effective)),
                 ) == 1;
                 seat.lock.setCapsLock(caps_active);
             }
@@ -183,20 +183,20 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, seat: *Seat) void
             if (keysym == .NoSymbol) return;
 
             const lock = seat.lock;
-            switch (@intFromEnum(keysym)) {
-                @intFromEnum(xkb.Keysym.Return), @intFromEnum(xkb.Keysym.KP_Enter) => {
+            switch (@backingInt(keysym)) {
+                @backingInt(xkb.Keysym.Return), @backingInt(xkb.Keysym.KP_Enter) => {
                     lock.submitPassword();
                     return;
                 },
-                @intFromEnum(xkb.Keysym.Escape) => {
+                @backingInt(xkb.Keysym.Escape) => {
                     lock.secret.clear();
                     lock.setColor(.init);
                     return;
                 },
-                @intFromEnum(xkb.Keysym.u), @intFromEnum(xkb.Keysym.c) => {
+                @backingInt(xkb.Keysym.u), @backingInt(xkb.Keysym.c) => {
                     const ctrl_active = xkb_state.modNameIsActive(
                         xkb.names.mod.ctrl,
-                        @enumFromInt(xkb.State.Component.mods_depressed | xkb.State.Component.mods_latched),
+                        @fromBackingInt(@intCast(xkb.State.Component.mods_depressed | xkb.State.Component.mods_latched)),
                     ) == 1;
                     if (ctrl_active) {
                         lock.secret.clear();
@@ -204,7 +204,7 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, seat: *Seat) void
                         return;
                     }
                 },
-                @intFromEnum(xkb.Keysym.BackSpace) => {
+                @backingInt(xkb.Keysym.BackSpace) => {
                     lock.secret.backspace();
                     if (lock.secret.isEmpty()) {
                         lock.setColor(.init);
