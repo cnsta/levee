@@ -38,7 +38,7 @@
       default =
         pkgs.callPackage ./nix/devShell.nix
         {
-          zig = zig.packages.${pkgs.stdenv.hostPlatform.system}."0.16.0";
+          zig = zig.packages.${pkgs.stdenv.hostPlatform.system}."0.17.1";
           zon2nix = zon2nix.packages.${pkgs.stdenv.hostPlatform.system}.zon2nix;
         };
     });

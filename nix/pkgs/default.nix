@@ -1,10 +1,9 @@
 {
   lib,
   newScope,
-  zig_0_16,
+  zig_0_17,
 }:
 lib.makeScope newScope (self: {
-  # Pinned until the Zig 0.17 migration
-  zig = zig_0_16;
+  zig = zig_0_17;
   levee = self.callPackage ./levee/package.nix {};
 })
