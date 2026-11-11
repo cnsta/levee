@@ -60,26 +60,16 @@ pub fn build(b: *std.Build) void {
 
     exe.root_module.addAnonymousImport("example_config", .{ .root_source_file = b.path("example-config.zon") });
 
-    exe.use_llvm = true;
-    exe.use_lld = true;
-
     exe.root_module.linkSystemLibrary("wayland-client", .{});
     exe.root_module.linkSystemLibrary("xkbcommon", .{});
     exe.root_module.linkSystemLibrary("pam", .{});
     exe.root_module.linkSystemLibrary("vpx", .{});
     b.installArtifact(exe);
 
-    const install_prefix = std.fs.path.resolve(b.allocator, &.{b.install_prefix}) catch @panic("OOM");
-    if (std.mem.eql(u8, install_prefix, "/usr")) {
-        b.installFile("pam.d/levee", "../etc/pam.d/levee");
-    } else {
-        b.installFile("pam.d/levee", "etc/pam.d/levee");
-    }
+    b.installLibFile("pam.d/levee", "pam.d/levee");
 
     const test_step = b.step("test", "Run unit tests");
     const tests = b.addTest(.{ .root_module = exe.root_module });
-    tests.use_llvm = true;
-    tests.use_lld = true;
     test_step.dependOn(&b.addRunArtifact(tests).step);
 }
 

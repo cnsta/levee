@@ -2,19 +2,19 @@
     .name = .levee,
     .version = "0.1.7",
     .fingerprint = 0xe33674b71e7e219f,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .wayland = .{
-            .url = "git+https://github.com/ifreund/zig-wayland.git#589aaf7c213159547d774ef8e6491f0045c511d5",
-            .hash = "wayland-0.7.0-dev-lQa1krn7AQCMUzT3J6gWyukl3L3kbMtCZy9djQemUYA-",
+            .url = "https://codeberg.org/ifreund/zig-wayland/archive/v0.7.0.tar.gz",
+            .hash = "wayland-0.7.0-lQa1kuP8AQD5dW7_o-VKLVD_QbqXe7Zob78r2su7Pyex",
         },
         .xkbcommon = .{
-            .url = "git+https://codeberg.org/ifreund/zig-xkbcommon.git#6c2f41e269adde0d2cd58d20c02c4f8803d83eb1",
-            .hash = "xkbcommon-0.5.0-dev-VDqIe0y2AgA1RzA2ICMdGhaAgSXdhtRTbYybQQu7WfOa",
+            .url = "https://codeberg.org/ifreund/zig-xkbcommon/archive/v0.5.0.tar.gz",
+            .hash = "xkbcommon-0.5.0-VDqIe8y3AgDU-cGL02xZplwABH3WbpTimrrgbgTgD_3g",
         },
         .zigimg = .{
-            .url = "git+https://github.com/zigimg/zigimg.git#575e194a494144aced6b7e920b13faab48864340",
-            .hash = "zigimg-0.1.0-8_eo2hgmGAAqEt2YcxP9GKGmYVdtLHEEBO03PZQ_3IgG",
+            .url = "git+https://github.com/zigimg/zigimg.git#bbdbb8623c38b55985f968e9652a2dc17ba56ee9",
+            .hash = "zigimg-0.1.0-8_eo2qBpGADeVlkaFseD4JHHWhAG_i2-I8ZOppCUk6rR",
         },
     },
     .paths = .{

@@ -55,15 +55,18 @@ pub fn parse(gpa: Allocator, source: [:0]const u8, report: *?[]const u8) error{O
     var arena = std.heap.ArenaAllocator.init(gpa);
     errdefer arena.deinit();
 
-    var diag: zon.parse.Diagnostics = .{};
+    var diag: zon.parse.Diagnostics = undefined;
 
-    const config = zon.parse.fromSliceAlloc(Config, arena.allocator(), source, &diag, .{
+    const config = zon.parse.fromSlice(Config, .{
+        .gpa = gpa,
+        .arena = arena.allocator(),
+        .source = source,
+        .diagnostics = &diag,
         .ignore_unknown_fields = false,
-        .free_on_error = false,
     }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.ParseZon => {
-            report.* = try std.fmt.allocPrint(gpa, "{f}", .{diag});
+            report.* = try std.fmt.allocPrint(gpa, "{f}", .{diag.fmt("config")});
             arena.deinit();
             return null;
         },
