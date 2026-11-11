@@ -159,7 +159,7 @@ test "starCount: one per codepoint, at least one, capped" {
     try testing.expectEqual(@as(u32, 1), starCount(""));
     try testing.expectEqual(@as(u32, 3), starCount("abc"));
     try testing.expectEqual(@as(u32, 2), starCount("åä"));
-    try testing.expectEqual(@as(u32, max_stars), starCount("x" ** (max_stars + 5)));
+    try testing.expectEqual(@as(u32, max_stars), starCount(&@as([max_stars + 5]u8, @splat('x'))));
 }
 
 test "Spinner: frames advance on interval boundaries and wrap per cycle" {

@@ -216,8 +216,8 @@ fn fatalBadColor(raw: []const u8) noreturn {
 }
 
 var runtime_log_level: log.Level = switch (@import("builtin").mode) {
-    .Debug => .debug,
-    .ReleaseSafe, .ReleaseFast, .ReleaseSmall => .err,
+    .debug => .debug,
+    .safe, .fast, .small => .err,
 };
 
 pub const std_options: std.Options = .{
@@ -231,6 +231,6 @@ fn logFn(
     comptime format: []const u8,
     args: anytype,
 ) void {
-    if (@intFromEnum(level) > @intFromEnum(runtime_log_level)) return;
+    if (@backingInt(level) > @backingInt(runtime_log_level)) return;
     log.defaultLog(level, scope, format, args);
 }

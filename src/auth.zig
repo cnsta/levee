@@ -63,7 +63,7 @@ fn child(username: []const u8, password: []const u8, write_fd: posix.fd_t) noret
     current_password = password;
 
     var user_buf: [256:0]u8 = undefined;
-    const user_z = std.fmt.bufPrintZ(&user_buf, "{s}", .{username}) catch {
+    const user_z = std.fmt.bufPrintSentinel(&user_buf, "{s}", .{username}, 0) catch {
         report(write_fd, false);
         std.process.exit(1);
     };
@@ -122,7 +122,7 @@ fn converse(
     for (0..n) |i| {
         const m = c_msg[i];
         if (m.*.msg_style == pam.PAM_PROMPT_ECHO_OFF) {
-            responses[i].resp = ally.dupeZ(u8, password) catch return pam.PAM_BUF_ERR;
+            responses[i].resp = ally.dupeSentinel(u8, password, 0) catch return pam.PAM_BUF_ERR;
         }
     }
     return pam.PAM_SUCCESS;

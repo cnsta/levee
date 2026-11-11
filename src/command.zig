@@ -49,7 +49,7 @@ const Prepared = struct {
 
 fn prepare(a: mem.Allocator, argv: []const []const u8) !Prepared {
     const c_argv = try a.allocSentinel(?[*:0]const u8, argv.len, null);
-    for (argv, c_argv) |arg, *c| c.* = (try a.dupeZ(u8, arg)).ptr;
+    for (argv, c_argv) |arg, *c| c.* = (try a.dupeSentinel(u8, arg, 0)).ptr;
 
     var candidates: std.ArrayList([*:0]const u8) = .empty;
     if (mem.indexOfScalar(u8, argv[0], '/') != null) {
